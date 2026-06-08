@@ -8,7 +8,7 @@ from typing import Sequence
 
 import pandas as pd
 
-from .models import ProductRecord
+from .models import EXPORT_COLUMNS, ProductRecord
 
 
 EXPORT_DIR = Path("exports")
@@ -26,9 +26,12 @@ class Exporter:
             raise ValueError(msg)
 
         timestamp = dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-        path = self.base_dir / f"imdb-export-{timestamp}.{self._extension(normalized_format)}"
+        default_name = f"predictions.{self._extension(normalized_format)}"
+        path = self.base_dir / default_name
+        if path.exists():
+            path = self.base_dir / f"predictions-{timestamp}.{self._extension(normalized_format)}"
 
-        df = pd.DataFrame([record.values_for_export() for record in records])
+        df = pd.DataFrame([record.values_for_export() for record in records], columns=EXPORT_COLUMNS)
 
         if normalized_format == "csv":
             df.to_csv(path, index=False)
@@ -40,4 +43,3 @@ class Exporter:
     @staticmethod
     def _extension(format: str) -> str:
         return "csv" if format == "csv" else "xlsx"
-

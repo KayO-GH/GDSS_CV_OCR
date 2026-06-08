@@ -25,6 +25,10 @@ class ProductStore:
         with self._lock:
             return list(self._records.values())
 
+    def remove(self, record_id: str) -> ProductRecord | None:
+        with self._lock:
+            return self._records.pop(record_id, None)
+
     def clear(self) -> None:
         with self._lock:
             self._records.clear()
@@ -56,14 +60,13 @@ class ProductStore:
             reasons.append("matching barcode")
 
         incoming_brand = (incoming.get("brand") or {}).get("value")
-        incoming_weight = (incoming.get("weight_and_unit") or {}).get("value")
+        incoming_weight = (incoming.get("weight") or {}).get("value")
         if incoming_brand and existing.brand.value and incoming_brand.lower() == existing.brand.value.lower():
             score += 0.2
             reasons.append("matching brand")
 
-        if incoming_weight and existing.weight_and_unit.value and incoming_weight.lower() == existing.weight_and_unit.value.lower():
+        if incoming_weight and existing.weight.value and incoming_weight.lower() == existing.weight.value.lower():
             score += 0.1
             reasons.append("matching weight")
 
-        return score, reasons
-
+        return round(score, 2), reasons

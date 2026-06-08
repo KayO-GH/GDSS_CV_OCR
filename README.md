@@ -1,14 +1,17 @@
-## IMDB Auto-Fill Streamlit App
+## Hackathon IMDB Auto-Fill Streamlit App
 
-This project is a single Streamlit experience that turns product imagery into structured Item Master data (IMDB). It wraps a multimodal extraction pipeline, lightweight normalization, duplicate detection, and CSV/Excel export into one interactive workflow.
+This project is a Streamlit experience that turns grouped product imagery into the hackathon Item Master Database (IMDB) submission format. It wraps multimodal extraction, barcode scanning, workbook-style normalization, human review, duplicate handling, ground-truth evaluation, and CSV/Excel export into one workflow.
 
 ### Key Features
 
-- **Batch image upload** backed by a vision-language model and optional barcode scan.
+- **Grouped image upload** backed by a vision-language model and optional barcode scan.
+- **Exact 13-column hackathon export** with `ITEM_NAME`, `BARCODE`, `MANUFACTURER`, `BRAND`, `WEIGHT`, `PACKAGING  TYPE`, `COUNTRY`, `VARIANT`, `TYPE`, `FRAGRANCE_FLAVOR`, `PROMOTION`, `ADDONS`, and `TAGLINE`.
+- **Workbook-style normalization** for uppercase values, compact weights, canonical packaging, country aliases, and digit-only barcodes.
 - **Confidence-aware review** with a configurable low-confidence threshold.
-- **Inline editing** that records manual overrides for auditing.
+- **Inline editing plus split/merge controls** for product groups that need manual row adjustment.
 - **Duplicate suggestions** driven by barcode, brand, and weight heuristics.
-- **One-click export** to CSV or Excel, saved locally for download.
+- **Ground-truth evaluation** against `hackathon_material/Hackathon Materials/output_results.xlsx`.
+- **One-click export** to `predictions.csv` or `predictions.xlsx`, saved locally for download.
 
 ### Prerequisites
 
@@ -47,13 +50,13 @@ This project is a single Streamlit experience that turns product imagery into st
 
 ### Testing
 
-Run the lightweight unit suite once dependencies are installed:
+Run the unit suite once dependencies are installed:
 
 ```bash
 pytest
 ```
 
-Tests focus on the data pipeline, exporter, and duplicate heuristics. They skip external API calls by stubbing the vision client.
+Tests focus on the data contract, grouping, normalization, evaluation, exporter, pipeline, and duplicate heuristics. They skip external API calls by stubbing the vision client.
 
 ### Project Layout
 

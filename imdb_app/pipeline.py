@@ -14,11 +14,12 @@ except ImportError:  # pragma: no cover
     Image = None  # type: ignore[assignment]
     ImageOps = None  # type: ignore[assignment]
 
-from .models import ProductRecord
+from .models import Attribute, IMDB_ATTRIBUTES, ProductRecord
 from .normalizer import normalize_record
 from .vlm_client import VLMClient, get_vlm_client
 from .barcode import extract_barcode
 from .exporter import Exporter
+from .grouping import ImageGroup
 
 
 def preprocess(image_bytes: bytes) -> bytes:
@@ -60,6 +61,57 @@ class ExtractionPipeline:
         normalize_record(vlm_record)
         return vlm_record
 
+    async def process_group(self, group: ImageGroup) -> ProductRecord:
+        preprocessed = [(image.filename, preprocess(image.image_bytes)) for image in group.images]
+
+        vlm_result, barcode_values = await asyncio.gather(
+            self.client.extract_group(preprocessed, group_id=group.group_id),
+            asyncio.gather(*(asyncio.to_thread(extract_barcode, image_bytes) for _, image_bytes in preprocessed)),
+            return_exceptions=True,
+        )
+
+        if isinstance(vlm_result, Exception):
+            vlm_record = self._fallback_record(group, vlm_result)
+        else:
+            vlm_record = vlm_result
+
+        if not vlm_record.id:
+            vlm_record.id = group.group_id or uuid.uuid4().hex
+
+        vlm_record.filename = group.group_id
+        vlm_record.filenames = group.filenames
+        vlm_record.metadata.setdefault("group_id", group.group_id)
+        vlm_record.metadata.setdefault("image_count", len(group.images))
+
+        if isinstance(barcode_values, Exception):
+            vlm_record.metadata["barcode_error"] = str(barcode_values)
+            barcode_candidates: Sequence[str | None] = []
+        else:
+            barcode_candidates = barcode_values
+
+        barcode_value = next((value for value in barcode_candidates if value), None)
+        if barcode_value:
+            vlm_record.barcode.value = barcode_value
+            vlm_record.barcode.source = "barcode_scan"
+            vlm_record.barcode.confidence = 0.95
+
+        normalize_record(vlm_record)
+        return vlm_record
+
+    @staticmethod
+    def _fallback_record(group: ImageGroup, error: Exception) -> ProductRecord:
+        attributes = {
+            attr: Attribute(value=None, confidence=0.0, source="api_error", notes=str(error))
+            for attr in IMDB_ATTRIBUTES
+        }
+        return ProductRecord(
+            id=group.group_id,
+            filename=group.group_id,
+            filenames=group.filenames,
+            metadata={"group_id": group.group_id, "image_count": len(group.images), "api_error": str(error)},
+            **attributes,
+        )
+
     def export(self, records: Sequence[ProductRecord], *, format: str) -> Path:
         return self.exporter.export(records, format=format)
 
@@ -79,3 +131,8 @@ def run_pipeline_sync(pipeline: ExtractionPipeline, image_bytes: bytes, filename
 
     return asyncio.run(pipeline.process_image(image_bytes, filename=filename))
 
+
+def run_group_pipeline_sync(pipeline: ExtractionPipeline, group: ImageGroup) -> ProductRecord:
+    """Convenience helper for grouped Streamlit callbacks."""
+
+    return asyncio.run(pipeline.process_group(group))

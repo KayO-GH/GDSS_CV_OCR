@@ -1,16 +1,19 @@
 # Prompt Playbook
 
 ## Goal
-Extract the ten IMDB attributes from a single product image. The prompt balances instruction, formatting guidance, and gentle reminders to inspect labels, logos, and barcode text.
+Extract the 13 hackathon IMDB fields from all images in a product group. The prompt balances instruction, formatting guidance, and reminders to inspect labels, logos, barcode text, manufacturer text, and the image tag printed at the bottom of sample images.
 
 ## Base Prompt Template
 
 ```
-You are a retail catalog specialist generating structured data from product imagery. Return JSON with the fields below. Be concise.
+You are a retail catalog specialist generating structured data from grouped product imagery. Return JSON with the fields below. Be concise.
 
 Context:
 - Prioritize text on labels, barcode numbers, and brand marks.
-- Infer missing attributes from common sense when confidence ≥0.4; otherwise leave value null.
+- Combine evidence across all product angles.
+- Return uppercase values.
+- Use digit-only barcodes and compact weights such as `250G`, `500ML`, `1L`, or `2.2KG`.
+- Leave uncertain values null instead of guessing.
 
 Schema per field:
 {
@@ -21,7 +24,7 @@ Schema per field:
 }
 
 Fields:
-barcode, category_type, segment_type, manufacturer, brand, product_name, weight_and_unit, packaging_type, country_of_origin, promo_messages.
+item_name, barcode, manufacturer, brand, weight, packaging_type, country, variant, type, fragrance_flavor, promotion, addons, tagline.
 ```
 
 ### Optional System Preface
@@ -31,9 +34,10 @@ Use `"You are a meticulous retail data analyst"` as the system role to encourage
 ## Column-Level Hints
 
 - **Barcode**: ask the model to output digits only. If unreadable, return null with a note.
-- **Weight & Unit**: highlight that the unit should include quantity + unit (e.g. `"330 ml"`).
+- **Item Name**: use the full descriptive catalog name, including brand, weight, packaging, type, manufacturer, and country when visible.
+- **Weight**: compact quantity + unit with no internal space unless the ground truth style requires it.
 - **Country of Origin**: remind the model to quote the exact label wording before normalization.
-- **Promo Messages**: mention to collect temporary offers, slogans, or marketing claims.
+- **Promotion/Addons/Tagline**: split temporary offers, pack contents, and descriptive slogans into the correct fields.
 
 ## Iteration Notes
 
@@ -43,4 +47,3 @@ Track weak columns after each test run. For example:
 - *Test Batch 02*: Promo message missing; instruct the model to scan top/bottom label text.
 
 Document adjustments here so future contributors understand prompt evolution.
-

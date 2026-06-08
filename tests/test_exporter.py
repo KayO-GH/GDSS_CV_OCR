@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from imdb_app.exporter import Exporter
-from imdb_app.models import Attribute, ProductRecord
+from imdb_app.models import EXPORT_COLUMNS, Attribute, ProductRecord
 
 
 def make_record(record_id: str = "1") -> ProductRecord:
     return ProductRecord(
         id=record_id,
-        product_name=Attribute(value="Fizz Cola", confidence=0.9, source="test"),
+        item_name=Attribute(value="FIZZ COLA", confidence=0.9, source="test"),
         brand=Attribute(value="Fizz", confidence=0.8, source="test"),
     )
 
@@ -17,7 +17,10 @@ def test_exporter_creates_csv(tmp_path):
     path = exporter.export([make_record()], format="csv")
 
     assert path.exists()
+    assert path.name == "predictions.csv"
     assert path.suffix == ".csv"
+    assert path.read_text().splitlines()[0].split(",") == EXPORT_COLUMNS
+    assert ",,,," in path.read_text()
 
 
 def test_exporter_rejects_unknown_format(tmp_path):

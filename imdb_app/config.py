@@ -11,9 +11,28 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", case_sensitive=False)
 
-    vlm_api_key: str | None = Field(default=None, validation_alias=AliasChoices("VLM_API_KEY", "vlm_api_key"))
-    vlm_api_url: AnyHttpUrl | None = Field(default=None, validation_alias=AliasChoices("VLM_API_URL", "vlm_api_url"))
-    vlm_model: str = Field(default="gpt-4o-mini", validation_alias=AliasChoices("VLM_MODEL", "vlm_model"))
+    vlm_provider: str = Field(default="cohere", validation_alias=AliasChoices("VLM_PROVIDER", "vlm_provider"))
+    cohere_api_key: str | None = Field(default=None, validation_alias=AliasChoices("COHERE_API_KEY", "cohere_api_key"))
+    cohere_api_url: AnyHttpUrl | None = Field(
+        default="https://api.cohere.com/v2/chat",
+        validation_alias=AliasChoices("COHERE_API_URL", "cohere_api_url"),
+    )
+    cohere_model: str = Field(
+        default="command-a-vision-07-2025",
+        validation_alias=AliasChoices("COHERE_MODEL", "cohere_model"),
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENAI_API_KEY", "openai_api_key", "VLM_API_KEY", "vlm_api_key"),
+    )
+    openai_api_url: AnyHttpUrl | None = Field(
+        default="https://api.openai.com/v1/responses",
+        validation_alias=AliasChoices("OPENAI_API_URL", "openai_api_url", "VLM_API_URL", "vlm_api_url"),
+    )
+    openai_model: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices("OPENAI_MODEL", "openai_model", "VLM_MODEL", "vlm_model"),
+    )
     request_timeout_seconds: int = Field(
         default=60,
         validation_alias=AliasChoices("REQUEST_TIMEOUT_SECONDS", "request_timeout_seconds"),
@@ -22,6 +41,24 @@ class Settings(BaseSettings):
         default=0.55,
         validation_alias=AliasChoices("CONFIDENCE_THRESHOLD", "confidence_threshold", "default_confidence_threshold"),
     )
+
+    @property
+    def vlm_api_key(self) -> str | None:
+        """Backward-compatible alias for the OpenAI API key."""
+
+        return self.openai_api_key
+
+    @property
+    def vlm_api_url(self) -> AnyHttpUrl | None:
+        """Backward-compatible alias for the OpenAI API URL."""
+
+        return self.openai_api_url
+
+    @property
+    def vlm_model(self) -> str:
+        """Backward-compatible alias for the OpenAI model."""
+
+        return self.openai_model
 
 
 @lru_cache(maxsize=1)

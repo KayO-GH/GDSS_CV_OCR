@@ -14,9 +14,9 @@ except ImportError:  # pragma: no cover
     Image = None  # type: ignore[assignment]
     ImageOps = None  # type: ignore[assignment]
 
-from .models import Attribute, IMDB_ATTRIBUTES, ProductRecord
+from .models import ProductRecord
 from .normalizer import normalize_record
-from .vlm_client import VLMClient, get_vlm_client
+from .vlm_client import SupportsVLMExtraction, get_vlm_client, normalize_provider
 from .barcode import extract_barcode
 from .exporter import Exporter
 from .grouping import ImageGroup
@@ -38,7 +38,7 @@ def preprocess(image_bytes: bytes) -> bytes:
 class ExtractionPipeline:
     """Coordinates VLM extraction, barcode scan, and normalization."""
 
-    def __init__(self, client: VLMClient, exporter: Exporter | None = None) -> None:
+    def __init__(self, client: SupportsVLMExtraction, exporter: Exporter | None = None) -> None:
         self.client = client
         self.exporter = exporter or Exporter()
 
@@ -71,9 +71,9 @@ class ExtractionPipeline:
         )
 
         if isinstance(vlm_result, Exception):
-            vlm_record = self._fallback_record(group, vlm_result)
-        else:
-            vlm_record = vlm_result
+            raise vlm_result
+
+        vlm_record = vlm_result
 
         if not vlm_record.id:
             vlm_record.id = group.group_id or uuid.uuid4().hex
@@ -98,31 +98,20 @@ class ExtractionPipeline:
         normalize_record(vlm_record)
         return vlm_record
 
-    @staticmethod
-    def _fallback_record(group: ImageGroup, error: Exception) -> ProductRecord:
-        attributes = {
-            attr: Attribute(value=None, confidence=0.0, source="api_error", notes=str(error))
-            for attr in IMDB_ATTRIBUTES
-        }
-        return ProductRecord(
-            id=group.group_id,
-            filename=group.group_id,
-            filenames=group.filenames,
-            metadata={"group_id": group.group_id, "image_count": len(group.images), "api_error": str(error)},
-            **attributes,
-        )
-
     def export(self, records: Sequence[ProductRecord], *, format: str) -> Path:
         return self.exporter.export(records, format=format)
 
 
 _pipeline: ExtractionPipeline | None = None
+_pipeline_provider: str | None = None
 
 
-def get_pipeline() -> ExtractionPipeline:
-    global _pipeline
-    if _pipeline is None:
-        _pipeline = ExtractionPipeline(client=get_vlm_client())
+def get_pipeline(provider: str | None = None) -> ExtractionPipeline:
+    global _pipeline, _pipeline_provider
+    normalized_provider = normalize_provider(provider)
+    if _pipeline is None or _pipeline_provider != normalized_provider:
+        _pipeline = ExtractionPipeline(client=get_vlm_client(normalized_provider))
+        _pipeline_provider = normalized_provider
     return _pipeline
 
 

@@ -5,6 +5,7 @@ This project is a Streamlit experience that turns grouped product imagery into t
 ### Key Features
 
 - **Grouped image upload** backed by a vision-language model and optional barcode scan.
+- **Provider toggle** for Cohere or OpenAI, with Cohere as the default vision provider.
 - **Exact 13-column hackathon export** with `ITEM_NAME`, `BARCODE`, `MANUFACTURER`, `BRAND`, `WEIGHT`, `PACKAGING  TYPE`, `COUNTRY`, `VARIANT`, `TYPE`, `FRAGRANCE_FLAVOR`, `PROMOTION`, `ADDONS`, and `TAGLINE`.
 - **Workbook-style normalization** for uppercase values, compact weights, canonical packaging, country aliases, and digit-only barcodes.
 - **Confidence-aware review** with a configurable low-confidence threshold.
@@ -29,9 +30,11 @@ This project is a Streamlit experience that turns grouped product imagery into t
 
    | Variable | Description |
    | --- | --- |
-   | `VLM_API_KEY` | API key for the multimodal model (e.g., OpenAI Responses API). |
-   | `VLM_API_URL` | Optional override for the responses endpoint. |
-   | `VLM_MODEL` | Model name to call (defaults to `gpt-4o-mini`). |
+   | `VLM_PROVIDER` | Default provider in the sidebar: `cohere` or `openai` (defaults to `cohere`). |
+   | `COHERE_API_KEY` | Cohere API key for the default vision model. |
+   | `COHERE_MODEL` | Cohere model name (defaults to `command-a-vision-07-2025`). |
+   | `OPENAI_API_KEY` | Optional OpenAI API key for the fallback provider. Existing `VLM_API_KEY` still works as an alias. |
+   | `OPENAI_MODEL` | Optional OpenAI model name. Existing `VLM_MODEL` still works as an alias. |
    | `REQUEST_TIMEOUT_SECONDS` | Timeout for outbound model requests. |
    | `CONFIDENCE_THRESHOLD` | Initial threshold for highlighting low-confidence fields. |
 
@@ -68,6 +71,6 @@ Tests focus on the data contract, grouping, normalization, evaluation, exporter,
 
 ### Notes
 
-- Without a `VLM_API_KEY`, the app still runs but returns empty fields to let you explore the UI.
+- Missing provider config, HTTP/API failures, and response-parse failures now surface as explicit extraction errors instead of producing empty rows.
 - The pipeline gracefully skips barcode extraction when PyZbar or Pillow are unavailable.
 - For offline environments, pre-build wheels for pandas/openpyxl or install once with network access, then reuse the virtual environment.

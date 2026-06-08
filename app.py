@@ -34,9 +34,12 @@ def get_store() -> ProductStore:
     return st.session_state.store
 
 
-def get_pipeline_instance() -> ExtractionPipeline:
+def get_pipeline_instance(provider: str) -> ExtractionPipeline:
+    if st.session_state.get("pipeline_provider") != provider:
+        st.session_state.pop("pipeline", None)
+        st.session_state.pipeline_provider = provider
     if "pipeline" not in st.session_state:
-        st.session_state.pipeline = get_pipeline()
+        st.session_state.pipeline = get_pipeline(provider)
     return st.session_state.pipeline
 
 
@@ -253,10 +256,19 @@ def main() -> None:
     st.caption("Group product images, auto-fill the required 13 columns, review low-confidence fields, and export predictions.")
 
     store = get_store()
-    pipeline = get_pipeline_instance()
     exporter = st.session_state.setdefault("exporter", Exporter())
 
     st.sidebar.subheader("Configuration")
+    configured_provider = settings.vlm_provider.strip().lower()
+    default_provider = configured_provider if configured_provider in {"cohere", "openai"} else "cohere"
+    provider = st.sidebar.radio(
+        "Model provider",
+        options=["cohere", "openai"],
+        index=["cohere", "openai"].index(default_provider),
+        horizontal=True,
+    )
+    pipeline = get_pipeline_instance(provider)
+
     threshold = st.sidebar.slider(
         "Low confidence threshold",
         min_value=0.0,
@@ -265,10 +277,13 @@ def main() -> None:
         step=0.05,
     )
 
-    if settings.vlm_api_key:
-        st.sidebar.success("VLM API key detected")
+    active_key = settings.cohere_api_key if provider == "cohere" else settings.openai_api_key
+    active_model = settings.cohere_model if provider == "cohere" else settings.openai_model
+    if active_key:
+        st.sidebar.success(f"{provider.title()} key detected")
     else:
-        st.sidebar.warning("No VLM API key provided. Fallback attributes will be empty.")
+        st.sidebar.error(f"No {provider.title()} API key provided. Extraction will fail until key is configured.")
+    st.sidebar.caption(f"Model: {active_model}")
 
     if st.sidebar.button("Clear workspace", type="secondary", use_container_width=True):
         store.clear()

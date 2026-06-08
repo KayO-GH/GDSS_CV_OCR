@@ -5,6 +5,7 @@ import pytest
 from imdb_app.models import Attribute, ProductRecord
 from imdb_app.pipeline import ExtractionPipeline
 from imdb_app.grouping import ImageGroup, ImagePayload
+from imdb_app.vlm_client import ProviderConfigurationError
 
 
 class StubClient:
@@ -69,17 +70,32 @@ async def test_pipeline_processes_image_group(sample_image_bytes: bytes):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_returns_reviewable_record_when_vlm_fails(sample_image_bytes: bytes):
+async def test_pipeline_raises_error_when_vlm_fails(sample_image_bytes: bytes):
     pipeline = ExtractionPipeline(client=FailingClient())
     group = ImageGroup(
         group_id="S123",
         images=[ImagePayload(filename="S123_1.jpg", image_bytes=sample_image_bytes)],
     )
 
-    record = await pipeline.process_group(group)
+    with pytest.raises(RuntimeError, match="api unavailable"):
+        await pipeline.process_group(group)
 
-    assert record.id == "S123"
-    assert record.filename == "S123"
-    assert record.filenames == ["S123_1.jpg"]
-    assert record.metadata["api_error"] == "api unavailable"
-    assert record.item_name.source == "api_error"
+
+class MissingConfigClient:
+    async def extract(self, image_bytes: bytes, filename: str | None = None) -> ProductRecord:
+        raise ProviderConfigurationError("Missing API key for selected provider 'cohere'. Set COHERE_API_KEY or switch providers.")
+
+    async def extract_group(self, images: list[tuple[str, bytes]], group_id: str | None = None) -> ProductRecord:
+        raise ProviderConfigurationError("Missing API key for selected provider 'cohere'. Set COHERE_API_KEY or switch providers.")
+
+
+@pytest.mark.asyncio
+async def test_pipeline_raises_provider_config_error_for_group(sample_image_bytes: bytes):
+    pipeline = ExtractionPipeline(client=MissingConfigClient())
+    group = ImageGroup(
+        group_id="S123",
+        images=[ImagePayload(filename="S123_1.jpg", image_bytes=sample_image_bytes)],
+    )
+
+    with pytest.raises(ProviderConfigurationError, match="Missing API key for selected provider 'cohere'"):
+        await pipeline.process_group(group)

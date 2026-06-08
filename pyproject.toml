@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imdb-auto-fill"
+version = "0.2.0"
+description = "Streamlit demo that converts product imagery into IMDB catalog data."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "streamlit>=1.32,<2",
+    "pandas>=2.2,<3",
+    "httpx>=0.27,<0.28",
+    "pydantic-settings>=2.3,<3",
+    "python-dotenv>=1.0,<2",
+    "pyzbar>=0.1,<0.2",
+    "pillow>=10,<11",
+    "openpyxl>=3.1,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.23,<0.24",
+]
+
+[project.urls]
+homepage = "https://github.com/openai"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["imdb_app"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]

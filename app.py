@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import io
 import uuid
@@ -16,7 +17,7 @@ from imdb_app.evaluator import GROUND_TRUTH_PATH, evaluate_records
 from imdb_app.exporter import Exporter
 from imdb_app.grouping import ImagePayload, group_images
 from imdb_app.normalizer import normalize_record
-from imdb_app.pipeline import ExtractionPipeline, get_pipeline, run_group_pipeline_sync
+from imdb_app.pipeline import ExtractionPipeline, get_pipeline
 from imdb_app.store import ProductStore
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
@@ -64,21 +65,42 @@ def load_sample_group(group_id: str, image_dir: Path = PRODUCT_IMAGE_DIR) -> lis
     ]
 
 
+def load_all_sample_payloads(image_dir: Path = PRODUCT_IMAGE_DIR) -> list[ImagePayload]:
+    return [ImagePayload(filename=path.name, image_bytes=path.read_bytes()) for path in sorted(image_dir.glob("*.jpg"))]
+
+
+async def _process_groups_async(groups: list, pipeline: ExtractionPipeline) -> list[tuple[str, ProductRecord | None, Exception | None]]:
+    semaphore = asyncio.Semaphore(max(1, settings.group_processing_concurrency))
+
+    async def run_group(group) -> tuple[str, ProductRecord | None, Exception | None]:
+        async with semaphore:
+            try:
+                record = await pipeline.process_group(group)
+            except Exception as exc:  # pragma: no cover - network/provider behavior
+                return group.group_id, None, exc
+            return group.group_id, record, None
+
+    return await asyncio.gather(*(run_group(group) for group in groups))
+
+
 def process_image_payloads(payloads: Iterable[ImagePayload], pipeline: ExtractionPipeline, store: ProductStore) -> tuple[list[ProductRecord], list[str]]:
     processed: list[ProductRecord] = []
     errors: list[str] = []
     groups = group_images(payloads)
 
     status = st.status("Processing product groups...", expanded=True)
-    for group in groups:
-        status.write(f"Extracting {group.group_id} from {len(group.images)} image(s)")
-        try:
-            record = run_group_pipeline_sync(pipeline, group)
-        except Exception as exc:  # pragma: no cover - defensive logging for user feedback
-            errors.append(f"{group.group_id}: {exc}")
-        else:
+    status.write(
+        f"Queued {len(groups)} product group(s) with concurrency {max(1, settings.group_processing_concurrency)}"
+    )
+    results = asyncio.run(_process_groups_async(groups, pipeline))
+    for group, (_, record, error) in zip(groups, results):
+        if error is not None:  # pragma: no cover - defensive logging for user feedback
+            errors.append(f"{group.group_id}: {error}")
+            status.write(f"Failed {group.group_id}")
+        elif record is not None:
             store.upsert(record)
             processed.append(record)
+            status.write(f"Extracted {group.group_id} from {len(group.images)} image(s)")
     status.update(label="Extraction complete", state="complete")
 
     return processed, errors
@@ -302,6 +324,17 @@ def main() -> None:
         )
         if st.sidebar.button("Load sample group", use_container_width=True):
             payloads = load_sample_group(selected_group)
+            processed, errors = process_image_payloads(payloads, pipeline, store)
+            if processed:
+                st.success(f"Processed {len(processed)} sample product group(s).")
+            if errors:
+                error_buffer = io.StringIO()
+                for item in errors:
+                    error_buffer.write(f"- {item}\n")
+                st.error(error_buffer.getvalue())
+            set_suggestions(store.merge_suggestions([record.to_dict() for record in store.all()]))
+        if st.sidebar.button("Load all", use_container_width=True):
+            payloads = load_all_sample_payloads()
             processed, errors = process_image_payloads(payloads, pipeline, store)
             if processed:
                 st.success(f"Processed {len(processed)} sample product group(s).")

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 import os
+import re
 from typing import Any, Dict, Optional, Protocol
 
 import httpx
@@ -65,6 +67,9 @@ class ProviderConfigurationError(RuntimeError):
     """Raised when selected VLM provider is missing required configuration."""
 
 
+TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
 def build_attribute_schema(*, include_numeric_bounds: bool = True) -> dict[str, Any]:
     confidence_schema: dict[str, Any] = {"type": ["number", "null"]}
     if include_numeric_bounds:
@@ -98,8 +103,42 @@ def image_data_url(image_bytes: bytes, mime_type: str = "image/jpeg") -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
+def normalize_imdb_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap common provider/schema wrappers around the expected attribute payload."""
+
+    properties = payload.get("properties")
+    if isinstance(properties, dict) and any(name in properties for name in IMDB_ATTRIBUTES):
+        return properties
+    return payload
+
+
+def normalize_attribute_payload(raw_value: Any) -> dict[str, Any]:
+    if isinstance(raw_value, dict):
+        return {
+            "value": raw_value.get("value"),
+            "confidence": raw_value.get("confidence"),
+            "source": raw_value.get("source"),
+            "notes": raw_value.get("notes"),
+        }
+
+    if raw_value is None:
+        return {"value": None, "confidence": None, "source": None, "notes": None}
+
+    if isinstance(raw_value, str):
+        return {"value": raw_value, "confidence": None, "source": "provider_string_fallback", "notes": None}
+
+    return {"value": json.dumps(raw_value), "confidence": None, "source": "provider_value_fallback", "notes": None}
+
+
 def attributes_from_payload(payload: dict[str, Any]) -> dict[str, Attribute]:
-    return {name: Attribute(**(payload.get(name, {}) or {})) for name in IMDB_ATTRIBUTES}
+    normalized_payload = normalize_imdb_payload(payload)
+    return {name: Attribute(**normalize_attribute_payload(normalized_payload.get(name))) for name in IMDB_ATTRIBUTES}
+
+
+def compact_error_detail(detail: str) -> str:
+    collapsed = re.sub(r"<[^>]+>", " ", detail)
+    collapsed = re.sub(r"\s+", " ", collapsed).strip()
+    return collapsed or detail.strip()
 
 
 class BaseVLMClient:
@@ -121,16 +160,7 @@ class BaseVLMClient:
         payload = self._build_payload(images=images, group_id=group_id)
 
         async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
-            response = await client.post(self.api_url, headers=headers, json=payload)
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                detail = response.text.strip()
-                if detail:
-                    raise RuntimeError(
-                        f"{self.provider.title()} API error {response.status_code}: {detail}"
-                    ) from exc
-                raise
+            response = await self._post_with_retries(client, headers=headers, payload=payload, group_id=group_id)
             data = response.json()
 
         return self._parse_response(data, filename=group_id, filenames=[filename for filename, _ in images])
@@ -143,6 +173,61 @@ class BaseVLMClient:
 
     def _missing_api_key_message(self) -> str:
         return f"Missing API key for selected provider '{self.provider}'."
+
+    async def _post_with_retries(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+        group_id: str | None,
+    ) -> httpx.Response:
+        attempts = max(1, settings.request_retry_attempts)
+        last_error: Exception | None = None
+
+        for attempt in range(1, attempts + 1):
+            try:
+                response = await client.post(self.api_url, headers=headers, json=payload)
+                response.raise_for_status()
+                return response
+            except httpx.HTTPStatusError as exc:
+                if not self._is_retryable_status(exc.response.status_code) or attempt == attempts:
+                    raise RuntimeError(self._build_http_error_message(exc.response, group_id=group_id, attempts=attempt)) from exc
+                last_error = exc
+                await asyncio.sleep(self._retry_delay_seconds(exc.response, attempt))
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if attempt == attempts:
+                    raise RuntimeError(
+                        f"{self.provider.title()} API temporary failure after {attempt} attempt(s) for {group_id or 'unknown group'}: {exc}"
+                    ) from exc
+                last_error = exc
+                await asyncio.sleep(settings.request_retry_base_delay_seconds * attempt)
+
+        if last_error is not None:
+            raise RuntimeError(str(last_error)) from last_error
+        raise RuntimeError(f"{self.provider.title()} API request failed without response for {group_id or 'unknown group'}")
+
+    @staticmethod
+    def _is_retryable_status(status_code: int) -> bool:
+        return status_code in TRANSIENT_STATUS_CODES
+
+    def _retry_delay_seconds(self, response: httpx.Response, attempt: int) -> float:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return max(float(retry_after), 0.0)
+            except ValueError:
+                pass
+        return settings.request_retry_base_delay_seconds * attempt
+
+    def _build_http_error_message(self, response: httpx.Response, *, group_id: str | None, attempts: int) -> str:
+        detail = compact_error_detail(response.text)
+        prefix = f"{self.provider.title()} API error {response.status_code}"
+        if self._is_retryable_status(response.status_code):
+            prefix += f" after {attempts} attempt(s)"
+        if group_id:
+            prefix += f" for {group_id}"
+        return f"{prefix}: {detail}" if detail else prefix
 
     def _fallback_record(self, filename: str | None, filenames: list[str] | None = None) -> ProductRecord:
         dummy_attributes = {name: Attribute(value=None, confidence=0.0, source=f"{self.provider}_fallback") for name in IMDB_ATTRIBUTES}

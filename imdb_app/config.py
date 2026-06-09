@@ -41,6 +41,18 @@ class Settings(BaseSettings):
         default=0.55,
         validation_alias=AliasChoices("CONFIDENCE_THRESHOLD", "confidence_threshold", "default_confidence_threshold"),
     )
+    group_processing_concurrency: int = Field(
+        default=3,
+        validation_alias=AliasChoices("GROUP_PROCESSING_CONCURRENCY", "group_processing_concurrency"),
+    )
+    request_retry_attempts: int = Field(
+        default=3,
+        validation_alias=AliasChoices("REQUEST_RETRY_ATTEMPTS", "request_retry_attempts"),
+    )
+    request_retry_base_delay_seconds: float = Field(
+        default=2.0,
+        validation_alias=AliasChoices("REQUEST_RETRY_BASE_DELAY_SECONDS", "request_retry_base_delay_seconds"),
+    )
 
     @property
     def vlm_api_key(self) -> str | None:

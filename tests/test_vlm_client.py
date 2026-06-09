@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+
 import pytest
+import httpx
 
 from imdb_app.models import IMDB_ATTRIBUTES
+import imdb_app.vlm_client as vlm_client
 from imdb_app.vlm_client import (
     CohereVLMClient,
     OpenAIVLMClient,
@@ -63,6 +67,39 @@ def test_cohere_response_parses_product_record():
     assert record.item_name.value == "TAPOK PREMIUM BLACK TEA"
 
 
+def test_cohere_response_parses_schema_wrapped_payload():
+    client = CohereVLMClient(api_key="test", api_url="https://api.cohere.com/v2/chat")
+    wrapped_payload = {
+        "type": "object",
+        "properties": {
+            name: {"value": None, "confidence": 0.0, "source": "test", "notes": None}
+            for name in IMDB_ATTRIBUTES
+        },
+        "required": IMDB_ATTRIBUTES,
+        "additionalProperties": False,
+    }
+    wrapped_payload["properties"]["type"]["value"] = "SEASONING POWDER"
+    wrapped_payload["properties"]["item_name"]["value"] = "MUMMY'S KITCHEN STEW SEASONING POWDER"
+    response = {"id": "cohere-id", "message": {"content": [{"type": "text", "text": __import__("json").dumps(wrapped_payload)}]}}
+
+    record = client._parse_response(response, filename="S1", filenames=["S1_1.jpg"])
+
+    assert record.item_name.value == "MUMMY'S KITCHEN STEW SEASONING POWDER"
+    assert record.type.value == "SEASONING POWDER"
+
+
+def test_cohere_response_coerces_string_attribute_value():
+    client = CohereVLMClient(api_key="test", api_url="https://api.cohere.com/v2/chat")
+    payload = {name: {"value": None, "confidence": 0.0, "source": "test", "notes": None} for name in IMDB_ATTRIBUTES}
+    payload["type"] = "BLACK TEA"
+    response = {"id": "cohere-id", "message": {"content": [{"type": "text", "text": __import__("json").dumps(payload)}]}}
+
+    record = client._parse_response(response, filename="S1", filenames=["S1_1.jpg"])
+
+    assert record.type.value == "BLACK TEA"
+    assert record.type.source == "provider_string_fallback"
+
+
 def test_provider_factory_defaults_to_supported_clients():
     assert isinstance(get_vlm_client("cohere"), CohereVLMClient)
     assert isinstance(get_vlm_client("openai"), OpenAIVLMClient)
@@ -84,3 +121,82 @@ async def test_cohere_client_raises_clear_error_when_api_key_missing():
 
     with pytest.raises(ProviderConfigurationError, match="Set COHERE_API_KEY or switch providers"):
         await client.extract_group(images=[("S1_1.jpg", b"image")], group_id="S1")
+
+
+@pytest.mark.asyncio
+async def test_cohere_client_retries_transient_502_then_succeeds(monkeypatch):
+    client = CohereVLMClient(api_key="test", api_url="https://api.cohere.com/v2/chat")
+    calls = {"count": 0}
+    payload = {
+        name: {"value": None, "confidence": 0.0, "source": "test", "notes": None}
+        for name in IMDB_ATTRIBUTES
+    }
+    payload["item_name"]["value"] = "RECOVERED ITEM"
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            calls["count"] += 1
+            request = httpx.Request("POST", "https://api.cohere.com/v2/chat")
+            if calls["count"] == 1:
+                return httpx.Response(
+                    502,
+                    text="<html><h1>Error: Server Error</h1><h2>Please try again in 30 seconds.</h2></html>",
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={"id": "cohere-id", "message": {"content": [{"type": "text", "text": json.dumps(payload)}]}},
+                request=request,
+            )
+
+    monkeypatch.setattr(vlm_client.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(vlm_client.settings, "request_retry_attempts", 2)
+    monkeypatch.setattr(vlm_client.settings, "request_retry_base_delay_seconds", 0.0)
+
+    record = await client.extract_group(images=[("S1_1.jpg", b"image")], group_id="S1")
+
+    assert calls["count"] == 2
+    assert record.item_name.value == "RECOVERED ITEM"
+
+
+@pytest.mark.asyncio
+async def test_cohere_client_surfaces_compact_error_after_retry_exhaustion(monkeypatch):
+    client = CohereVLMClient(api_key="test", api_url="https://api.cohere.com/v2/chat")
+    calls = {"count": 0}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            calls["count"] += 1
+            request = httpx.Request("POST", "https://api.cohere.com/v2/chat")
+            return httpx.Response(
+                502,
+                text="<html><h1>Error: Server Error</h1><h2>Please try again in 30 seconds.</h2></html>",
+                request=request,
+            )
+
+    monkeypatch.setattr(vlm_client.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(vlm_client.settings, "request_retry_attempts", 2)
+    monkeypatch.setattr(vlm_client.settings, "request_retry_base_delay_seconds", 0.0)
+
+    with pytest.raises(RuntimeError, match="Cohere API error 502 after 2 attempt\\(s\\) for S1: Error: Server Error Please try again in 30 seconds\\."):
+        await client.extract_group(images=[("S1_1.jpg", b"image")], group_id="S1")
+
+    assert calls["count"] == 2

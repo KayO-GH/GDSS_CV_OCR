@@ -40,6 +40,8 @@ class ProductStore:
                 record_id = incoming.get("id")
                 best = []
                 for existing in self._records.values():
+                    if existing.id == record_id:
+                        continue
                     score, reasons = self._score(existing, incoming)
                     if score > 0:
                         best.append({"candidate_id": existing.id, "score": score, "reasons": reasons})

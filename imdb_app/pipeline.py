@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover
 
 from .models import ProductRecord
 from .normalizer import normalize_record
+from .validators import validate_barcode
 from .vlm_client import SupportsVLMExtraction, get_vlm_client, normalize_provider
 from .barcode import extract_barcode
 from .exporter import Exporter
@@ -42,6 +43,32 @@ class ExtractionPipeline:
         self.client = client
         self.exporter = exporter or Exporter()
 
+    @staticmethod
+    def _apply_barcode_scan(record: ProductRecord, barcode_value: str | None) -> None:
+        if not barcode_value:
+            return
+
+        scanner_validation = validate_barcode(barcode_value)
+        model_value = record.barcode.value
+        model_validation = validate_barcode(model_value)
+
+        if model_value and model_validation.value != scanner_validation.value:
+            record.metadata["barcode_conflict"] = {
+                "model": model_validation.value,
+                "model_valid": model_validation.is_valid,
+                "scanner": scanner_validation.value,
+                "scanner_valid": scanner_validation.is_valid,
+            }
+
+        should_use_scanner = scanner_validation.is_valid or not model_validation.is_valid
+        if should_use_scanner:
+            record.barcode.value = scanner_validation.value
+            record.barcode.source = "barcode_scan"
+            record.barcode.confidence = 0.95 if scanner_validation.is_valid else 0.5
+
+        if "barcode_conflict" in record.metadata:
+            record.barcode.notes = "Barcode scanner and model output disagreed; review required"
+
     async def process_image(self, image_bytes: bytes, filename: str | None = None) -> ProductRecord:
         preprocessed = preprocess(image_bytes)
 
@@ -53,10 +80,7 @@ class ExtractionPipeline:
         if not vlm_record.id:
             vlm_record.id = uuid.uuid4().hex
 
-        if barcode_value:
-            vlm_record.barcode.value = barcode_value
-            vlm_record.barcode.source = "barcode_scan"
-            vlm_record.barcode.confidence = 0.95
+        self._apply_barcode_scan(vlm_record, barcode_value)
 
         normalize_record(vlm_record)
         return vlm_record
@@ -90,10 +114,7 @@ class ExtractionPipeline:
             barcode_candidates = barcode_values
 
         barcode_value = next((value for value in barcode_candidates if value), None)
-        if barcode_value:
-            vlm_record.barcode.value = barcode_value
-            vlm_record.barcode.source = "barcode_scan"
-            vlm_record.barcode.confidence = 0.95
+        self._apply_barcode_scan(vlm_record, barcode_value)
 
         normalize_record(vlm_record)
         return vlm_record

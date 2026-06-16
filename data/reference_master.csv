@@ -1,0 +1,122 @@
+field,canonical_value,alias,source
+manufacturer,AFRICAN CONSUMER PRODUCTS,AFRICAN CONSUMER PRODUCTS,workbook
+manufacturer,AJC TRADING CO LTD,AJC TRADING CO LTD,workbook
+manufacturer,AL AIN COMPANY LTD,AL AIN COMPANY LTD,workbook
+manufacturer,AQUAFRESH LIMITED,AQUAFRESH LIMITED,workbook
+manufacturer,ATONA FOODS,ATONA FOODS,workbook
+manufacturer,B-DIET LTD,B-DIET LTD,workbook
+manufacturer,BLOW CHEM INDUSTRIES LTD,BLOW CHEM INDUSTRIES LTD,workbook
+manufacturer,C'PROPRE,C'PROPRE,workbook
+manufacturer,ETKAF,ETKAF,workbook
+manufacturer,FAGIP VENTURES,FAGIP VENTURES,workbook
+manufacturer,GB FOODS,GB FOODS,workbook
+manufacturer,GEE TRADING SAL,GEE TRADING SAL,workbook
+manufacturer,HAMTA & SONS LTD,HAMTA & SONS LTD,workbook
+manufacturer,HOMEPRO COMPANY LTD,HOMEPRO COMPANY LTD,workbook
+manufacturer,KING SAM,KING SAM,workbook
+manufacturer,LGD LIMITED,LGD LIMITED,workbook
+manufacturer,MADHU JAYANTI INTERNATIONAL PVT LTD,MADHU JAYANTI INTERNATIONAL PVT LTD,workbook
+manufacturer,MENKISH IMPEX,MENKISH IMPEX,workbook
+manufacturer,NAM VIET PHAT FOOD CO. LIMITED,NAM VIET PHAT FOOD CO. LIMITED,workbook
+manufacturer,NESTLE,NESTLE,workbook
+manufacturer,NUTRIFOODS,NUTRIFOODS,workbook
+manufacturer,PROCUS LIMITED,PROCUS LIMITED,workbook
+manufacturer,PROMASIDOR,PROMASIDOR,workbook
+manufacturer,PT SAYAP MAS UTAMA,PT SAYAP MAS UTAMA,workbook
+manufacturer,S.D.T.M,S.D.T.M,workbook
+manufacturer,SENICO,SENICO,workbook
+manufacturer,SISTER SARDINE & MACKEREL VENTURES,SISTER SARDINE & MACKEREL VENTURES,workbook
+manufacturer,SYNERGY ENTREPRISES ( FZE),SYNERGY ENTREPRISES ( FZE),workbook
+manufacturer,THE COCA COLA COMPANY,THE COCA COLA COMPANY,workbook
+manufacturer,U-FRESH ENTERPRISES,U-FRESH ENTERPRISES,workbook
+manufacturer,UNILEVER,UNILEVER,workbook
+manufacturer,UPFIELD,UPFIELD,workbook
+manufacturer,WATAWALA TEA CEYLON LTD,WATAWALA TEA CEYLON LTD,workbook
+manufacturer,ZHEJIANG NATIVE PRODUCE & ANIMAL CO LTD,ZHEJIANG NATIVE PRODUCE & ANIMAL CO LTD,workbook
+brand,ALFA,ALFA,workbook
+brand,BAMA,BAMA,workbook
+brand,BEL,BEL,workbook
+brand,BLUE BAND,BLUE BAND,workbook
+brand,BRISK FARM,BRISK FARM,workbook
+brand,C'PROPRE,C'PROPRE,workbook
+brand,CHOCOLIM,CHOCOLIM,workbook
+brand,EASY,EASY,workbook
+brand,ENA PA,ENA PA,workbook
+brand,GET,GET,workbook
+brand,GOLDEN VICTORIA,GOLDEN VICTORIA,workbook
+brand,JOJONAVI,JOJONAVI,workbook
+brand,KADI,KADI,workbook
+brand,KALYPPO,KALYPPO,workbook
+brand,KING SAM,KING SAM,workbook
+brand,KIVO,KIVO,workbook
+brand,LAILA,LAILA,workbook
+brand,LELE,LELE,workbook
+brand,LUX,LUX,workbook
+brand,MAGGI,MAGGI,workbook
+brand,MASEDA,MASEDA,workbook
+brand,MIKSI,MIKSI,workbook
+brand,MILO,MILO,workbook
+brand,MOK,MOK,workbook
+brand,MOSSE,MOSSE,workbook
+brand,MUMMY'S KITCHEN,MUMMY'S KITCHEN,workbook
+brand,POMO,POMO,workbook
+brand,ROSALINDA,ROSALINDA,workbook
+brand,SISTER,SISTER,workbook
+brand,SIYA,SIYA,workbook
+brand,SO KLIN,SO KLIN,workbook
+brand,TAPOK,TAPOK,workbook
+brand,TASTY TOM,TASTY TOM,workbook
+brand,THIS WAY,THIS WAY,workbook
+brand,U-FRESH,U-FRESH,workbook
+brand,VIBE,VIBE,workbook
+brand,ZAA,ZAA,workbook
+brand,ZESTA,ZESTA,workbook
+packaging_type,BOX,BOX,workbook
+packaging_type,CAN,CAN,workbook
+packaging_type,GLASS JAR,GLASS JAR,workbook
+packaging_type,PLASTIC BAG,PLASTIC BAG,workbook
+packaging_type,PLASTIC BOTTLE,PLASTIC BOTTLE,workbook
+packaging_type,POUCH,POUCH,workbook
+packaging_type,SACHET,SACHET,workbook
+packaging_type,TETRA PAK,TETRA PAK,workbook
+packaging_type,TIN,TIN,workbook
+packaging_type,TUB,TUB,workbook
+packaging_type,WRAPPED,WRAPPED,workbook
+country,CHINA,CHINA,workbook
+country,COTE D'IVOIRE,COTE D'IVOIRE,workbook
+country,GHANA,GHANA,workbook
+country,INDIA,INDIA,workbook
+country,INDONESIA,INDONESIA,workbook
+country,NIGERIA,NIGERIA,workbook
+country,SRI LANKA,SRI LANKA,workbook
+country,VIETNAM,VIETNAM,workbook
+type,3 IN 1,3 IN 1,workbook
+type,BAR,BAR,workbook
+type,BLACK TEA,BLACK TEA,workbook
+type,BUTTER,BUTTER,workbook
+type,MAYONNAISE,MAYONNAISE,workbook
+type,POWDER,POWDER,workbook
+type,SALTED MARGARINE,SALTED MARGARINE,workbook
+type,TOMATO MIX,TOMATO MIX,workbook
+fragrance_flavor,APPLE,APPLE,workbook
+fragrance_flavor,BEEF,BEEF,workbook
+fragrance_flavor,CHOCOLATE,CHOCOLATE,workbook
+fragrance_flavor,CHOCOLATE & MILK,CHOCOLATE & MILK,workbook
+fragrance_flavor,CITRUS,CITRUS,workbook
+fragrance_flavor,CLOVES,CLOVES,workbook
+fragrance_flavor,COLA,COLA,workbook
+fragrance_flavor,GINGER & GARLIC,GINGER & GARLIC,workbook
+fragrance_flavor,JAPANESE CAMELLIA & CITRUS OIL,JAPANESE CAMELLIA & CITRUS OIL,workbook
+fragrance_flavor,JOLLOF,JOLLOF,workbook
+fragrance_flavor,LEGUME,LEGUME,workbook
+fragrance_flavor,LEMON,LEMON,workbook
+fragrance_flavor,MALT,MALT,workbook
+fragrance_flavor,MULTI FRUIT,MULTI FRUIT,workbook
+fragrance_flavor,NOODLES & SPAGHETTI,NOODLES & SPAGHETTI,workbook
+fragrance_flavor,ORANGE,ORANGE,workbook
+fragrance_flavor,POWDER,POWDER,workbook
+fragrance_flavor,ROSE,ROSE,workbook
+fragrance_flavor,SOUP,SOUP,workbook
+fragrance_flavor,SPICY GINGER,SPICY GINGER,workbook
+fragrance_flavor,STEW RAGOUT,STEW RAGOUT,workbook
+fragrance_flavor,STRAWBERRY,STRAWBERRY,workbook

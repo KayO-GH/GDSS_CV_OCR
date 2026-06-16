@@ -36,6 +36,7 @@ Use `"You are a meticulous retail data analyst"` as the system role to encourage
 - **Barcode**: ask the model to output digits only. If unreadable, return null with a note.
 - **Item Name**: use the full descriptive catalog name, including brand, weight, packaging, type, manufacturer, and country when visible.
 - **Weight**: compact quantity + unit with no internal space unless the ground truth style requires it.
+- **Pack Syntax**: inspect patterns like `2GX100PCS`, `25+7 FREE`, and `1PCS 2G`; keep pack contents, promotions, and add-ons separate.
 - **Country of Origin**: remind the model to quote the exact label wording before normalization.
 - **Promotion/Addons/Tagline**: split temporary offers, pack contents, and descriptive slogans into the correct fields.
 
@@ -45,5 +46,6 @@ Track weak columns after each test run. For example:
 
 - *Test Batch 01*: Weight & Unit accuracy 60%; add guidance about ounces vs grams.
 - *Test Batch 02*: Promo message missing; instruct the model to scan top/bottom label text.
+- *Hackathon hardening*: Added checksum validation and deterministic parser coverage for TAPOK/ZESTA-style pack syntax.
 
 Document adjustments here so future contributors understand prompt evolution.

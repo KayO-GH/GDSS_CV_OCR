@@ -42,6 +42,16 @@ def test_merge_suggestions_scores_similar_records():
     assert suggestions[0]["candidates"][0]["score"] >= 1.0
 
 
+def test_merge_suggestions_skips_self_matches():
+    store = ProductStore()
+    record = make_record("catalogue-1")
+    store.upsert(record)
+
+    suggestions = store.merge_suggestions([record.to_dict()])
+
+    assert suggestions == []
+
+
 def test_remove_returns_record():
     store = ProductStore()
     store.upsert(make_record("item"))

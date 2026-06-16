@@ -1,30 +1,30 @@
 # Demo Script: IMDB Auto-Fill Prototype
 
 ## Overview
-This script narrates the end-to-end workflow for stakeholders. Target duration: 5–7 minutes.
+This script narrates the end-to-end workflow for stakeholders. Target duration: 3–4 minutes.
 
-1. **Intro (30s)**
+1. **Intro (20s)**
    - Explain the manual IMDB pain point and the goal: image → auto-filled master data.
-   - Mention that the prototype uses GPT-4o for multimodal extraction plus barcode/normalization helpers.
+   - Mention that the prototype supports live Cohere/OpenAI extraction plus a curated offline demo path.
 
-2. **Upload Step (1 min)**
-   - On the home screen, drag 2–3 sample product photos (or capture from mobile webcam).
-   - Highlight the progress indicator and how multiple images queue.
+2. **Add Images (35s)**
+   - Click **Use curated demo data**.
+   - Show BAMA, TAPOK, and ZESTA rows loading from workbook-backed fixtures.
+   - Point out that live sample extraction and upload remain available.
 
-3. **Auto-Filled Preview (2 min)**
-   - Show the accordion record cards. Point to confidence badges (green/yellow/red).
-   - Demonstrate editing a low-confidence cell (e.g., adjust packaging type).
-   - Call out inline notes when validation fails (e.g., barcode checksum).
+3. **Review Fields (70s)**
+   - Show product thumbnails beside the editable field cards.
+   - Open one required field and make a small edit.
+   - Point out confidence/source notes and the 13-column workbook mapping.
 
-4. **Duplicate Suggestions (1 min)**
-   - Expand the “Potential Duplicates” panel, explain scoring by barcode/brand/weight.
-   - Discuss how this can prevent duplicate catalog entries during ingestion.
+4. **Validate & Dedupe (45s)**
+   - Show barcode checksum status, pack parsing, required completion, and duplicate status.
+   - For TAPOK or ZESTA, highlight that pack syntax is interpreted separately from the raw product name.
 
-5. **Export (1 min)**
-   - Click “Export CSV” to generate an artifact. Show the success banner with export path.
-   - Mention the Excel option and how the file feeds downstream master-data ingestion.
+5. **Export (45s)**
+   - Use the output filters to demonstrate search-ready data.
+   - Generate CSV or Excel and show the visible download button in the main Export step.
 
-6. **Wrap-Up (30s)**
+6. **Wrap-Up (20s)**
    - Summarize accuracy benefits, human-in-loop edits, and integration next steps.
-   - Note future enhancements: batch job history, audit trail, richer normalization tables.
-
+   - End on the validation scorecard.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from imdb_app.models import Attribute, ProductRecord
+import imdb_app.pipeline as pipeline_module
 from imdb_app.pipeline import ExtractionPipeline
 from imdb_app.grouping import ImageGroup, ImagePayload
 from imdb_app.vlm_client import ProviderConfigurationError
@@ -67,6 +68,25 @@ async def test_pipeline_processes_image_group(sample_image_bytes: bytes):
     assert record.filename == "S123"
     assert record.filenames == ["S123_1.jpg", "S123_2.jpg"]
     assert record.metadata["image_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_pipeline_surfaces_barcode_conflicts(monkeypatch, sample_image_bytes: bytes):
+    class BarcodeClient(StubClient):
+        async def extract(self, image_bytes: bytes, filename: str | None = None) -> ProductRecord:
+            record = await super().extract(image_bytes, filename)
+            record.barcode = Attribute(value="8410300363439", confidence=0.7, source="stub")
+            return record
+
+    monkeypatch.setattr(pipeline_module, "extract_barcode", lambda _image_bytes: "8901035064345")
+
+    pipeline = ExtractionPipeline(client=BarcodeClient())
+    record = await pipeline.process_image(sample_image_bytes, filename="item.png")
+
+    assert record.barcode.value == "8901035064345"
+    assert record.barcode.source == "barcode_scan"
+    assert record.metadata["barcode_conflict"]["model"] == "8410300363439"
+    assert record.metadata["barcode_conflict"]["scanner"] == "8901035064345"
 
 
 @pytest.mark.asyncio

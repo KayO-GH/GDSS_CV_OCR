@@ -6,13 +6,15 @@ This project is a Streamlit experience that turns grouped product imagery into t
 
 - **Grouped image upload** backed by a vision-language model and optional barcode scan.
 - **Provider toggle** for Cohere or OpenAI, with Cohere as the default vision provider.
+- **Curated offline demo mode** for BAMA, TAPOK, and ZESTA sample groups, clearly labeled separately from live extraction.
 - **Exact 13-column hackathon export** with `ITEM_NAME`, `BARCODE`, `MANUFACTURER`, `BRAND`, `WEIGHT`, `PACKAGING  TYPE`, `COUNTRY`, `VARIANT`, `TYPE`, `FRAGRANCE_FLAVOR`, `PROMOTION`, `ADDONS`, and `TAGLINE`.
-- **Workbook-style normalization** for uppercase values, compact weights, canonical packaging, country aliases, and digit-only barcodes.
+- **Workbook-style normalization** for uppercase values, pack syntax, compact weights, canonical packaging, country aliases, and checksum-valid barcodes.
 - **Confidence-aware review** with a configurable low-confidence threshold.
+- **Image-backed field review** with thumbnails beside editable field cards.
 - **Inline editing plus split/merge controls** for product groups that need manual row adjustment.
 - **Duplicate suggestions** driven by barcode, brand, and weight heuristics.
-- **Ground-truth evaluation** against `hackathon_material/Hackathon Materials/output_results.xlsx`.
-- **One-click export** to `predictions.csv` or `predictions.xlsx`, saved locally for download.
+- **Validation scorecard** for barcode checksum, pack parsing, required-field completion, duplicates, and aligned ground-truth matching.
+- **Main-workflow export** to `predictions.csv` or `predictions.xlsx`, saved locally for download.
 
 ### Prerequisites
 
@@ -51,6 +53,8 @@ This project is a Streamlit experience that turns grouped product imagery into t
    # or, once dependencies are installed: streamlit run app.py
    ```
 
+4. For a reliable hackathon walkthrough, click **Use curated demo data** on the first screen. This loads workbook-backed rows without requiring API credentials. Use **Run selected sample live** or uploads when you want to demonstrate live VLM extraction.
+
 ### Testing
 
 Run the unit suite once dependencies are installed:
@@ -59,7 +63,17 @@ Run the unit suite once dependencies are installed:
 pytest
 ```
 
-Tests focus on the data contract, grouping, normalization, evaluation, exporter, pipeline, and duplicate heuristics. They skip external API calls by stubbing the vision client.
+Tests focus on the data contract, grouping, validation, pack parsing, normalization, evaluation, exporter, pipeline, demo fixtures, and duplicate heuristics. They skip external API calls by stubbing the vision client.
+
+### Visual QA
+
+Before recording or presenting, verify the app in Chrome at both desktop and mobile sizes:
+
+- Initial load shows the five-step workflow and the curated demo CTA in the main content.
+- Curated demo load shows product thumbnails, editable field cards, validation scorecard, duplicate status, and export preview.
+- A manual field edit persists and updates validation.
+- CSV or Excel generation exposes a visible download button in the main Export step.
+- Mobile width around `390 x 844` has no horizontal overflow and no required action hidden only in the sidebar.
 
 ### Project Layout
 

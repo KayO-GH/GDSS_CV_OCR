@@ -17,6 +17,7 @@ from imdb_app.demo_fixtures import DEMO_GROUP_IDS, load_demo_records
 from imdb_app.evaluator import GROUND_TRUTH_PATH, evaluate_aligned_records, evaluate_records
 from imdb_app.exporter import Exporter
 from imdb_app.grouping import (
+    evidence_payload_id,
     ImageEvidence,
     ImageGroup,
     ImagePayload,
@@ -498,7 +499,7 @@ def evidence_frame(cluster: ProductImageCluster) -> pd.DataFrame:
 
 def _evidence_for_image(cluster: ProductImageCluster, image: ImagePayload) -> ImageEvidence | None:
     for evidence in cluster.evidence:
-        if evidence.payload_id == image.payload_id:
+        if evidence_payload_id(evidence) == image.payload_id:
             return evidence
     return None
 
@@ -595,7 +596,7 @@ def render_group_review(clusters: list[ProductImageCluster]) -> list[ProductImag
                     for cluster in clusters:
                         if cluster.group_id == source_id:
                             moved_image = next((image for image in cluster.images if image.payload_id == payload_id), None)
-                            moved_evidence = next((item for item in cluster.evidence if item.payload_id == payload_id), None)
+                            moved_evidence = next((item for item in cluster.evidence if evidence_payload_id(item) == payload_id), None)
                             break
 
                     if moved_image is None:
@@ -605,7 +606,7 @@ def render_group_review(clusters: list[ProductImageCluster]) -> list[ProductImag
                     for cluster in clusters:
                         if cluster.group_id == source_id:
                             remaining_images = [image for image in cluster.images if image.payload_id != payload_id]
-                            remaining_evidence = [item for item in cluster.evidence if item.payload_id != payload_id]
+                            remaining_evidence = [item for item in cluster.evidence if evidence_payload_id(item) != payload_id]
                             if remaining_images:
                                 updated.append(
                                     _make_manual_cluster(cluster.group_id, remaining_images, remaining_evidence, cluster.reason)

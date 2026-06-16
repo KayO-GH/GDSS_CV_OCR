@@ -79,6 +79,16 @@ class ProductImageCluster:
         return ImageGroup(group_id=self.group_id, images=self.images)
 
 
+def evidence_payload_id(evidence: ImageEvidence) -> str:
+    payload_id = getattr(evidence, "payload_id", None)
+    if payload_id:
+        return payload_id
+    image_hash = getattr(evidence, "image_hash", None)
+    if image_hash:
+        return image_hash
+    return getattr(evidence, "filename", "")
+
+
 def hash_image_bytes(image_bytes: bytes) -> str:
     return hashlib.sha256(image_bytes).hexdigest()
 
@@ -171,7 +181,7 @@ def infer_product_groups(
 ) -> list[ProductImageCluster]:
     threshold = (thresholds or {}).get("high_confidence", HIGH_CONFIDENCE_THRESHOLD)
     image_by_payload_id = {image.payload_id: image for image in images}
-    evidences = sorted(evidence_by_payload_id.values(), key=lambda item: (item.filename, item.payload_id))
+    evidences = sorted(evidence_by_payload_id.values(), key=lambda item: (item.filename, evidence_payload_id(item)))
 
     barcode_groups: dict[str, list[ImageEvidence]] = {}
     unassigned: list[ImageEvidence] = []
@@ -184,9 +194,9 @@ def infer_product_groups(
     clusters: list[ProductImageCluster] = []
     for barcode, items in sorted(barcode_groups.items()):
         group_images_for_barcode = [
-            image_by_payload_id[item.payload_id]
+            image_by_payload_id[evidence_payload_id(item)]
             for item in items
-            if item.payload_id in image_by_payload_id
+            if evidence_payload_id(item) in image_by_payload_id
         ]
         clusters.append(
             ProductImageCluster(
@@ -201,7 +211,7 @@ def infer_product_groups(
 
     non_barcode_clusters: list[ProductImageCluster] = []
     for evidence in unassigned:
-        image = image_by_payload_id.get(evidence.payload_id)
+        image = image_by_payload_id.get(evidence_payload_id(evidence))
         if image is None:
             continue
 

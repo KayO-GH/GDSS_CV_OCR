@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from imdb_app.grouping import (
     ImageEvidence,
     ImagePayload,
@@ -169,3 +171,25 @@ def test_infer_product_groups_keeps_duplicate_filenames_distinct():
     clusters = infer_product_groups(images, evidence)
 
     assert [cluster.group_id for cluster in clusters] == ["barcode-6034000482027", "barcode-8410300363439"]
+
+
+def test_infer_product_groups_tolerates_legacy_evidence_without_payload_id():
+    image = ImagePayload(filename="legacy.jpg", image_bytes=b"1")
+    legacy_evidence = SimpleNamespace(
+        filename="legacy.jpg",
+        image_hash=image.payload_id,
+        barcode="6034000482027",
+        barcode_is_valid=True,
+        brand="LEGACY",
+        item_name="LEGACY ITEM",
+        weight="100G",
+        packaging_type="SACHET",
+        type="SNACK",
+        confidence=0.9,
+        source="legacy-cache",
+        notes=None,
+    )
+
+    clusters = infer_product_groups([image], {image.payload_id: legacy_evidence})
+
+    assert [cluster.group_id for cluster in clusters] == ["barcode-6034000482027"]

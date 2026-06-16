@@ -10,8 +10,12 @@ from imdb_app.vlm_client import ProviderConfigurationError
 
 
 class StubClient:
+    def __init__(self) -> None:
+        self.extract_calls = 0
+
     async def extract(self, image_bytes: bytes, filename: str | None = None) -> ProductRecord:
         del image_bytes
+        self.extract_calls += 1
         return ProductRecord(
             id="",
             filename=filename,
@@ -68,6 +72,48 @@ async def test_pipeline_processes_image_group(sample_image_bytes: bytes):
     assert record.filename == "S123"
     assert record.filenames == ["S123_1.jpg", "S123_2.jpg"]
     assert record.metadata["image_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_pipeline_analyzes_image_for_grouping(monkeypatch, sample_image_bytes: bytes):
+    monkeypatch.setattr(pipeline_module, "extract_barcode", lambda _image_bytes: "6034000482027")
+    pipeline = ExtractionPipeline(client=StubClient())
+
+    evidence = await pipeline.analyze_image_for_grouping(ImagePayload(filename="random.jpg", image_bytes=sample_image_bytes))
+
+    assert evidence.filename == "random.jpg"
+    assert evidence.barcode == "6034000482027"
+    assert evidence.barcode_is_valid is True
+    assert evidence.brand == "FIZZ"
+    assert evidence.weight == "330ML"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_grouping_evidence_cache_prevents_duplicate_provider_calls(monkeypatch, sample_image_bytes: bytes):
+    monkeypatch.setattr(pipeline_module, "extract_barcode", lambda _image_bytes: None)
+    client = StubClient()
+    pipeline = ExtractionPipeline(client=client)
+    cache = {}
+
+    await pipeline.analyze_images_for_grouping([ImagePayload(filename="one.jpg", image_bytes=sample_image_bytes)], cache)
+    evidence = await pipeline.analyze_images_for_grouping([ImagePayload(filename="renamed.jpg", image_bytes=sample_image_bytes)], cache)
+
+    assert client.extract_calls == 1
+    assert evidence[0].filename == "renamed.jpg"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_grouping_analysis_keeps_duplicate_filenames_distinct(monkeypatch, sample_image_bytes: bytes):
+    monkeypatch.setattr(pipeline_module, "extract_barcode", lambda _image_bytes: "6034000482027")
+    pipeline = ExtractionPipeline(client=StubClient())
+
+    first = ImagePayload(filename="IMG_0001.jpg", image_bytes=sample_image_bytes)
+    second = ImagePayload(filename="IMG_0001.jpg", image_bytes=sample_image_bytes + b"second")
+    evidence = await pipeline.analyze_images_for_grouping([first, second], {})
+
+    assert len(evidence) == 2
+    assert {item.payload_id for item in evidence} == {first.payload_id, second.payload_id}
+    assert all(item.filename == "IMG_0001.jpg" for item in evidence)
 
 
 @pytest.mark.asyncio

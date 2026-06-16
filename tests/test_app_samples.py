@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import app
-from imdb_app.grouping import ImagePayload
+from imdb_app.grouping import ImageEvidence, ImagePayload, ProductImageCluster
 from imdb_app.models import Attribute, ProductRecord
 from imdb_app.store import ProductStore
 
@@ -89,4 +89,27 @@ def test_process_image_payloads_processes_all_groups(monkeypatch):
 
     assert errors == []
     assert [record.id for record in processed] == ["S1", "S2"]
+    assert status_factory.instances[0].updated is True
+
+
+def test_process_reviewed_clusters_uses_reviewed_group_ids(monkeypatch):
+    status_factory = _DummyStatusFactory()
+    monkeypatch.setattr(app.st, "status", status_factory)
+    monkeypatch.setattr(app.settings, "group_processing_concurrency", 2)
+
+    cluster = ProductImageCluster(
+        group_id="auto-001",
+        images=[ImagePayload(filename="random-a.jpg", image_bytes=b"1"), ImagePayload(filename="random-b.jpg", image_bytes=b"2")],
+        evidence=[
+            ImageEvidence(payload_id="p1", filename="random-a.jpg", image_hash="h1", brand="Fizz"),
+            ImageEvidence(payload_id="p2", filename="random-b.jpg", image_hash="h2", brand="Fizz"),
+        ],
+        confidence=0.9,
+        reason="test",
+    )
+
+    processed, errors = app.process_reviewed_clusters([cluster], _PipelineStub(), ProductStore())
+
+    assert errors == []
+    assert [record.id for record in processed] == ["auto-001"]
     assert status_factory.instances[0].updated is True

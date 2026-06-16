@@ -10,7 +10,8 @@ This script narrates the end-to-end workflow for stakeholders. Target duration: 
 2. **Add Images (35s)**
    - Click **Use curated demo data**.
    - Show BAMA, TAPOK, and ZESTA rows loading from workbook-backed fixtures.
-   - Point out that live sample extraction and upload remain available.
+   - Point out that live sample extraction and arbitrary uploads remain available.
+   - For arbitrary uploads, explain that the app identifies product groups from barcode and label evidence rather than file names.
 
 3. **Review Fields (70s)**
    - Show product thumbnails beside the editable field cards.

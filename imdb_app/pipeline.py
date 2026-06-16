@@ -20,7 +20,7 @@ from .validators import validate_barcode
 from .vlm_client import SupportsVLMExtraction, get_vlm_client, normalize_provider
 from .barcode import extract_barcode
 from .exporter import Exporter
-from .grouping import ImageGroup
+from .grouping import ImageEvidence, ImageGroup, ImagePayload, hash_image_bytes
 
 
 def preprocess(image_bytes: bytes) -> bytes:
@@ -68,6 +68,113 @@ class ExtractionPipeline:
 
         if "barcode_conflict" in record.metadata:
             record.barcode.notes = "Barcode scanner and model output disagreed; review required"
+
+    @staticmethod
+    def _record_to_evidence(record: ProductRecord, filename: str, image_hash: str, barcode_value: str | None) -> ImageEvidence:
+        scanner_validation = validate_barcode(barcode_value)
+        record_barcode_validation = validate_barcode(record.barcode.value)
+        barcode_validation = scanner_validation if scanner_validation.is_valid else record_barcode_validation
+        barcode = barcode_validation.value
+        barcode_source = "barcode_scan" if scanner_validation.is_valid else record.barcode.source
+
+        field_confidences = [
+            getattr(record, attr).confidence or 0.0
+            for attr in ["item_name", "brand", "weight", "packaging_type", "type"]
+            if getattr(record, attr).value
+        ]
+        confidence = max(field_confidences, default=0.0)
+        if barcode_validation.is_valid:
+            confidence = max(confidence, 0.95)
+
+        return ImageEvidence(
+            payload_id=image_hash,
+            filename=filename,
+            image_hash=image_hash,
+            barcode=barcode,
+            barcode_is_valid=barcode_validation.is_valid,
+            barcode_type=barcode_validation.barcode_type,
+            item_name=record.item_name.value,
+            brand=record.brand.value,
+            weight=record.weight.value,
+            packaging_type=record.packaging_type.value,
+            type=record.type.value,
+            confidence=round(confidence, 2),
+            source=barcode_source or record.item_name.source,
+            notes=record.item_name.notes or record.barcode.notes,
+        )
+
+    async def analyze_image_for_grouping(self, image: ImagePayload) -> ImageEvidence:
+        image_hash = hash_image_bytes(image.image_bytes)
+        preprocessed = preprocess(image.image_bytes)
+
+        vlm_record, barcode_value = await asyncio.gather(
+            self.client.extract(preprocessed, filename=image.filename),
+            asyncio.to_thread(extract_barcode, preprocessed),
+        )
+
+        normalize_record(vlm_record)
+        self._apply_barcode_scan(vlm_record, barcode_value)
+        normalize_record(vlm_record)
+        return self._record_to_evidence(vlm_record, image.filename, image_hash, barcode_value)
+
+    async def analyze_images_for_grouping(
+        self,
+        payloads: Sequence[ImagePayload],
+        evidence_cache: dict[str, ImageEvidence] | None = None,
+    ) -> list[ImageEvidence]:
+        cache = evidence_cache if evidence_cache is not None else {}
+        evidence: list[ImageEvidence] = []
+        missing: list[ImagePayload] = []
+
+        for payload in payloads:
+            image_hash = hash_image_bytes(payload.image_bytes)
+            cached = cache.get(image_hash)
+            if cached is not None:
+                evidence.append(
+                    ImageEvidence(
+                        payload_id=payload.payload_id,
+                        filename=payload.filename,
+                        image_hash=image_hash,
+                        barcode=cached.barcode,
+                        barcode_is_valid=cached.barcode_is_valid,
+                        barcode_type=cached.barcode_type,
+                        item_name=cached.item_name,
+                        brand=cached.brand,
+                        weight=cached.weight,
+                        packaging_type=cached.packaging_type,
+                        type=cached.type,
+                        confidence=cached.confidence,
+                        source=cached.source,
+                        notes=cached.notes,
+                    )
+                )
+            else:
+                missing.append(payload)
+
+        if missing:
+            analyzed = await asyncio.gather(*(self.analyze_image_for_grouping(payload) for payload in missing))
+            for payload, item in zip(missing, analyzed):
+                cache[item.image_hash] = item
+                evidence.append(
+                    ImageEvidence(
+                        payload_id=payload.payload_id,
+                        filename=item.filename,
+                        image_hash=item.image_hash,
+                        barcode=item.barcode,
+                        barcode_is_valid=item.barcode_is_valid,
+                        barcode_type=item.barcode_type,
+                        item_name=item.item_name,
+                        brand=item.brand,
+                        weight=item.weight,
+                        packaging_type=item.packaging_type,
+                        type=item.type,
+                        confidence=item.confidence,
+                        source=item.source,
+                        notes=item.notes,
+                    )
+                )
+
+        return sorted(evidence, key=lambda item: item.filename)
 
     async def process_image(self, image_bytes: bytes, filename: str | None = None) -> ProductRecord:
         preprocessed = preprocess(image_bytes)

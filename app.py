@@ -16,7 +16,14 @@ from imdb_app import EXPORT_COLUMNS, IMDB_ATTRIBUTES, ProductRecord, settings
 from imdb_app.demo_fixtures import DEMO_GROUP_IDS, load_demo_records
 from imdb_app.evaluator import GROUND_TRUTH_PATH, evaluate_aligned_records, evaluate_records
 from imdb_app.exporter import Exporter
-from imdb_app.grouping import ImagePayload, group_images
+from imdb_app.grouping import (
+    ImageEvidence,
+    ImageGroup,
+    ImagePayload,
+    ProductImageCluster,
+    group_images_by_filename_prefix,
+    infer_product_groups,
+)
 from imdb_app.normalizer import normalize_record
 from imdb_app.pack_parser import parse_pack_text
 from imdb_app.pipeline import ExtractionPipeline, get_pipeline
@@ -70,6 +77,18 @@ def image_payload_cache() -> dict[str, list[ImagePayload]]:
     return st.session_state.setdefault("image_payloads_by_group", {})
 
 
+def grouping_evidence_cache() -> dict[str, ImageEvidence]:
+    return st.session_state.setdefault("grouping_evidence_by_hash", {})
+
+
+def upload_payload_cache() -> list[ImagePayload]:
+    return st.session_state.setdefault("uploaded_image_payloads", [])
+
+
+def inferred_cluster_cache() -> list[ProductImageCluster]:
+    return st.session_state.setdefault("inferred_image_clusters", [])
+
+
 def available_sample_groups(image_dir: Path = PRODUCT_IMAGE_DIR) -> list[str]:
     if not image_dir.exists():
         return []
@@ -88,7 +107,15 @@ def load_all_sample_payloads(image_dir: Path = PRODUCT_IMAGE_DIR) -> list[ImageP
 
 
 def remember_payloads(payloads: Iterable[ImagePayload]) -> list:
-    groups = group_images(payloads)
+    groups = group_images_by_filename_prefix(payloads)
+    cache = image_payload_cache()
+    for group in groups:
+        cache[group.group_id] = group.images
+    return groups
+
+
+def remember_clusters(clusters: Iterable[ProductImageCluster]) -> list[ImageGroup]:
+    groups = [cluster.to_image_group() for cluster in clusters]
     cache = image_payload_cache()
     for group in groups:
         cache[group.group_id] = group.images
@@ -133,6 +160,29 @@ def process_image_payloads(payloads: Iterable[ImagePayload], pipeline: Extractio
     return processed, errors
 
 
+def process_reviewed_clusters(clusters: Iterable[ProductImageCluster], pipeline: ExtractionPipeline, store: ProductStore) -> tuple[list[ProductRecord], list[str]]:
+    processed: list[ProductRecord] = []
+    errors: list[str] = []
+    groups = remember_clusters(clusters)
+
+    status = st.status("Extracting reviewed product groups", expanded=True)
+    status.write(f"Queued {len(groups)} reviewed product group(s)")
+    results = asyncio.run(_process_groups_async(groups, pipeline))
+    status.write("Normalizing fields and checking validation rules")
+    for group, (_, record, error) in zip(groups, results):
+        if error is not None:  # pragma: no cover - defensive logging for user feedback
+            errors.append(f"{group.group_id}: {error}")
+            status.write(f"Failed {group.group_id}")
+        elif record is not None:
+            store.upsert(record)
+            processed.append(record)
+            status.write(f"Extracted {group.group_id} from {len(group.images)} image(s)")
+    status.write("Checking duplicates")
+    status.update(label="Ready for field review", state="complete")
+
+    return processed, errors
+
+
 def process_uploads(files: Iterable["UploadedFile"], pipeline: ExtractionPipeline, store: ProductStore) -> tuple[list[ProductRecord], list[str]]:
     errors: list[str] = []
 
@@ -151,6 +201,40 @@ def process_uploads(files: Iterable["UploadedFile"], pipeline: ExtractionPipelin
     errors.extend(processing_errors)
 
     return processed, errors
+
+
+def payloads_from_uploads(files: Iterable["UploadedFile"]) -> tuple[list[ImagePayload], list[str]]:
+    payloads: list[ImagePayload] = []
+    errors: list[str] = []
+    for upload in files:
+        image_bytes = upload.getvalue()
+        if image_bytes:
+            payloads.append(ImagePayload(filename=upload.name, image_bytes=image_bytes))
+        else:
+            errors.append(f"{upload.name}: empty file")
+    return payloads, errors
+
+
+def identify_product_groups(payloads: list[ImagePayload], pipeline: ExtractionPipeline) -> tuple[list[ProductImageCluster], list[str]]:
+    errors: list[str] = []
+    if not payloads:
+        return [], errors
+
+    st.session_state.uploaded_image_payloads = payloads
+    status = st.status("Identifying product groups from image evidence", expanded=True)
+    status.write(f"Analyzing {len(payloads)} image(s) independently")
+    try:
+        evidence = asyncio.run(pipeline.analyze_images_for_grouping(payloads, grouping_evidence_cache()))
+    except Exception as exc:  # pragma: no cover - provider/network behavior
+        status.update(label="Grouping failed", state="error")
+        return [], [str(exc)]
+
+    evidence_by_payload_id = {item.payload_id: item for item in evidence}
+    clusters = infer_product_groups(payloads, evidence_by_payload_id)
+    st.session_state.inferred_image_clusters = clusters
+    status.write(f"Created {len(clusters)} candidate product group(s)")
+    status.update(label="Product groups ready for review", state="complete")
+    return clusters, errors
 
 
 def build_summary_frame(records: Iterable[ProductRecord]) -> pd.DataFrame:
@@ -388,6 +472,163 @@ def render_merge_suggestions(records: list[ProductRecord], suggestions: list[dic
                         st.rerun()
 
 
+def cluster_label(cluster: ProductImageCluster) -> str:
+    review = " - needs review" if cluster.needs_review else ""
+    return f"{cluster.group_id} ({len(cluster.images)} image(s), {cluster.confidence:.0%}){review}"
+
+
+def evidence_frame(cluster: ProductImageCluster) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Filename": evidence.filename,
+                "Barcode": evidence.barcode or "",
+                "Barcode valid": "Yes" if evidence.barcode_is_valid else "No",
+                "Brand": evidence.brand or "",
+                "Item name": evidence.item_name or "",
+                "Weight": evidence.weight or "",
+                "Packaging": evidence.packaging_type or "",
+                "Type": evidence.type or "",
+                "Confidence": evidence.confidence,
+            }
+            for evidence in cluster.evidence
+        ]
+    )
+
+
+def _evidence_for_image(cluster: ProductImageCluster, image: ImagePayload) -> ImageEvidence | None:
+    for evidence in cluster.evidence:
+        if evidence.payload_id == image.payload_id:
+            return evidence
+    return None
+
+
+def _make_manual_cluster(group_id: str, images: list[ImagePayload], evidence: list[ImageEvidence], reason: str) -> ProductImageCluster:
+    confidence = min([item.confidence for item in evidence], default=0.5)
+    return ProductImageCluster(
+        group_id=group_id,
+        images=sorted(images, key=lambda item: item.filename),
+        evidence=sorted(evidence, key=lambda item: item.filename),
+        confidence=confidence,
+        reason=reason,
+        needs_review=False,
+    )
+
+
+def render_group_review(clusters: list[ProductImageCluster]) -> list[ProductImageCluster]:
+    st.markdown("##### Review inferred product groups")
+    if not clusters:
+        st.caption("Upload images, then identify product groups before extraction.")
+        return clusters
+
+    for cluster in clusters:
+        with st.container(border=True):
+            st.markdown(f"**{cluster_label(cluster)}**")
+            st.caption(cluster.reason or "Product evidence grouping")
+            preview_cols = st.columns(min(len(cluster.images), 4) or 1)
+            for index, image in enumerate(cluster.images[:4]):
+                preview_cols[index].image(image.image_bytes, caption=image.filename, width=140)
+            if len(cluster.images) > 4:
+                st.caption(f"{len(cluster.images) - 4} more image(s) in this candidate group")
+            st.dataframe(evidence_frame(cluster), width="stretch", hide_index=True)
+
+    with st.expander("Adjust inferred groups", expanded=any(cluster.needs_review for cluster in clusters)):
+        group_options = {cluster_label(cluster): cluster.group_id for cluster in clusters}
+        split_col, merge_col, move_col = st.columns(3)
+
+        with split_col:
+            split_label = st.selectbox("Split group into single images", options=list(group_options), key="split-upload-cluster")
+            if st.button("Split group", disabled=not split_label, width="stretch"):
+                split_id = group_options[split_label]
+                updated: list[ProductImageCluster] = []
+                counter = 1
+                for cluster in clusters:
+                    if cluster.group_id != split_id:
+                        updated.append(cluster)
+                        continue
+                    for image in cluster.images:
+                        evidence = _evidence_for_image(cluster, image)
+                        updated.append(
+                            _make_manual_cluster(
+                                f"review-split-{counter:03d}",
+                                [image],
+                                [evidence] if evidence else [],
+                                "manually split for review",
+                            )
+                        )
+                        counter += 1
+                st.session_state.inferred_image_clusters = updated
+                st.rerun()
+
+        with merge_col:
+            merge_labels = st.multiselect("Merge groups", options=list(group_options), key="merge-upload-clusters")
+            if st.button("Merge selected groups", disabled=len(merge_labels) < 2, width="stretch"):
+                merge_ids = {group_options[label] for label in merge_labels}
+                merged_images: list[ImagePayload] = []
+                merged_evidence: list[ImageEvidence] = []
+                updated = []
+                for cluster in clusters:
+                    if cluster.group_id in merge_ids:
+                        merged_images.extend(cluster.images)
+                        merged_evidence.extend(cluster.evidence)
+                    else:
+                        updated.append(cluster)
+                updated.append(_make_manual_cluster("auto-merged-001", merged_images, merged_evidence, "manually merged by reviewer"))
+                st.session_state.inferred_image_clusters = updated
+                st.rerun()
+
+        with move_col:
+            image_options = {
+                f"{image.filename} ({cluster.group_id})": (cluster.group_id, image.payload_id)
+                for cluster in clusters
+                for image in cluster.images
+            }
+            move_label = st.selectbox("Move image", options=list(image_options), key="move-upload-image")
+            target_label = st.selectbox("Target group", options=list(group_options), key="move-upload-target")
+            if st.button("Move image", disabled=not move_label or not target_label, width="stretch"):
+                source_id, payload_id = image_options[move_label]
+                target_id = group_options[target_label]
+                if source_id != target_id:
+                    moved_image: ImagePayload | None = None
+                    moved_evidence: ImageEvidence | None = None
+                    updated = []
+                    for cluster in clusters:
+                        if cluster.group_id == source_id:
+                            moved_image = next((image for image in cluster.images if image.payload_id == payload_id), None)
+                            moved_evidence = next((item for item in cluster.evidence if item.payload_id == payload_id), None)
+                            break
+
+                    if moved_image is None:
+                        st.warning("Selected image could not be moved.")
+                        return inferred_cluster_cache()
+
+                    for cluster in clusters:
+                        if cluster.group_id == source_id:
+                            remaining_images = [image for image in cluster.images if image.payload_id != payload_id]
+                            remaining_evidence = [item for item in cluster.evidence if item.payload_id != payload_id]
+                            if remaining_images:
+                                updated.append(
+                                    _make_manual_cluster(cluster.group_id, remaining_images, remaining_evidence, cluster.reason)
+                                )
+                        elif cluster.group_id == target_id:
+                            updated.append(
+                                _make_manual_cluster(
+                                    cluster.group_id,
+                                    [*cluster.images, moved_image],
+                                    [*cluster.evidence, *([moved_evidence] if moved_evidence else [])],
+                                    "manually adjusted by reviewer",
+                                )
+                            )
+                        else:
+                            updated.append(cluster)
+                    if not any(cluster.group_id == target_id for cluster in updated):
+                        updated.append(_make_manual_cluster(target_id, [moved_image], [moved_evidence] if moved_evidence else [], "manual move"))
+                    st.session_state.inferred_image_clusters = updated
+                    st.rerun()
+
+    return inferred_cluster_cache()
+
+
 def render_row_controls(records: list[ProductRecord], store: ProductStore) -> None:
     if not records:
         return
@@ -527,15 +768,25 @@ def render_add_images_step(store: ProductStore, pipeline: ExtractionPipeline) ->
             "Upload product images", accept_multiple_files=True, type=["png", "jpg", "jpeg"], key="uploader"
         )
         if uploaded_files:
-            preview_payloads = [ImagePayload(filename=file.name, image_bytes=file.getvalue()) for file in uploaded_files if file.getvalue()]
-            groups = group_images(preview_payloads)
-            st.caption("Images are grouped by filename prefix before the first underscore.")
-            for group in groups:
-                st.write(f"{group.group_id}: {len(group.images)} image(s)")
-            if st.button("Run grouped extraction", width="stretch"):
-                processed, errors = process_uploads(uploaded_files, pipeline, store)
+            preview_payloads, upload_errors = payloads_from_uploads(uploaded_files)
+            if upload_errors:
+                st.error("\n".join(f"- {item}" for item in upload_errors))
+            st.caption("Uploaded images are grouped by product evidence. Filenames are retained only for display.")
+            st.write(f"{len(preview_payloads)} image(s) ready for product-group identification.")
+            if st.button("Identify product groups", width="stretch"):
+                clusters, errors = identify_product_groups(preview_payloads, pipeline)
+                if clusters:
+                    st.success(f"Identified {len(clusters)} candidate product group(s). Review them before extraction.")
+                if errors:
+                    st.error("\n".join(f"- {item}" for item in errors))
+
+        clusters = inferred_cluster_cache()
+        if clusters:
+            reviewed_clusters = render_group_review(clusters)
+            if st.button("Run extraction for reviewed groups", type="primary", width="stretch"):
+                processed, errors = process_reviewed_clusters(reviewed_clusters, pipeline, store)
                 if processed:
-                    st.success(f"Processed {len(processed)} product group(s).")
+                    st.success(f"Processed {len(processed)} reviewed product group(s).")
                 if errors:
                     st.error("\n".join(f"- {item}" for item in errors))
                 recompute_suggestions(store)
@@ -612,6 +863,9 @@ def main() -> None:
         st.session_state.pop("suggestions", None)
         st.session_state.pop("last_export_path", None)
         st.session_state.pop("image_payloads_by_group", None)
+        st.session_state.pop("grouping_evidence_by_hash", None)
+        st.session_state.pop("uploaded_image_payloads", None)
+        st.session_state.pop("inferred_image_clusters", None)
         st.rerun()
 
     records = store.all()

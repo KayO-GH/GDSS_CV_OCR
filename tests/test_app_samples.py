@@ -1,45 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-
 import app
+from imdb_app.exporter import Exporter
 from imdb_app.grouping import ImageEvidence, ImagePayload, ProductImageCluster
 from imdb_app.models import Attribute, ProductRecord
 from imdb_app.store import ProductStore
-
-from app import available_sample_groups, load_all_sample_payloads, load_sample_group
-
-
-def test_available_sample_groups_reads_hackathon_style_names(tmp_path: Path):
-    (tmp_path / "S1_1.jpg").write_bytes(b"1")
-    (tmp_path / "S1_2.jpg").write_bytes(b"2")
-    (tmp_path / "S2_1.jpg").write_bytes(b"3")
-    (tmp_path / "ignore.txt").write_bytes(b"x")
-
-    assert available_sample_groups(tmp_path) == ["S1", "S2"]
-
-
-def test_load_sample_group_returns_sorted_payloads(tmp_path: Path):
-    (tmp_path / "S1_2.jpg").write_bytes(b"2")
-    (tmp_path / "S1_1.jpg").write_bytes(b"1")
-
-    payloads = load_sample_group("S1", tmp_path)
-
-    assert [payload.filename for payload in payloads] == ["S1_1.jpg", "S1_2.jpg"]
-    assert [payload.image_bytes for payload in payloads] == [b"1", b"2"]
-
-
-def test_load_all_sample_payloads_returns_sorted_jpgs(tmp_path: Path):
-    (tmp_path / "S2_1.jpg").write_bytes(b"2")
-    (tmp_path / "S1_2.jpg").write_bytes(b"3")
-    (tmp_path / "S1_1.jpg").write_bytes(b"1")
-    (tmp_path / "ignore.txt").write_bytes(b"x")
-
-    payloads = load_all_sample_payloads(tmp_path)
-
-    assert [payload.filename for payload in payloads] == ["S1_1.jpg", "S1_2.jpg", "S2_1.jpg"]
-    assert [payload.image_bytes for payload in payloads] == [b"1", b"3", b"2"]
 
 
 @dataclass
@@ -113,3 +79,31 @@ def test_process_reviewed_clusters_uses_reviewed_group_ids(monkeypatch):
     assert errors == []
     assert [record.id for record in processed] == ["auto-001"]
     assert status_factory.instances[0].updated is True
+
+
+def test_render_workflow_empty_state_does_not_claim_duplicate_found(monkeypatch):
+    captions: list[str] = []
+    successes: list[str] = []
+
+    monkeypatch.setattr(app.st, "markdown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app.st, "container", lambda **_kwargs: _DummyContainer())
+    monkeypatch.setattr(app.st, "caption", lambda message: captions.append(message))
+    monkeypatch.setattr(app.st, "success", lambda message: successes.append(message))
+    monkeypatch.setattr(app.st, "info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app, "render_scorecard", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app, "render_merge_suggestions", app.render_merge_suggestions)
+    monkeypatch.setattr(app, "render_export_controls", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app, "get_suggestions", lambda: [])
+
+    app.render_workflow([], 0.55, ProductStore(), Exporter())
+
+    assert "Duplicate checks will appear after extraction." in captions
+    assert "No duplicate found" not in successes
+
+
+class _DummyContainer:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False

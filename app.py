@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import io
 import uuid
-from pathlib import Path
 from typing import Iterable, TYPE_CHECKING
 
 import pandas as pd
 import streamlit as st
 
 from imdb_app import EXPORT_COLUMNS, IMDB_ATTRIBUTES, ProductRecord, settings
-from imdb_app.demo_fixtures import DEMO_GROUP_IDS, load_demo_records
 from imdb_app.evaluator import GROUND_TRUTH_PATH, evaluate_aligned_records, evaluate_records
 from imdb_app.exporter import Exporter
 from imdb_app.grouping import (
@@ -37,7 +34,6 @@ if TYPE_CHECKING:  # pragma: no cover - type checking only
 
 st.set_page_config(page_title="IMDB Auto-Fill", layout="wide")
 
-PRODUCT_IMAGE_DIR = Path("hackathon_material/Hackathon Materials/product images")
 REQUIRED_ATTRIBUTES = [
     "item_name",
     "barcode",
@@ -88,23 +84,6 @@ def upload_payload_cache() -> list[ImagePayload]:
 
 def inferred_cluster_cache() -> list[ProductImageCluster]:
     return st.session_state.setdefault("inferred_image_clusters", [])
-
-
-def available_sample_groups(image_dir: Path = PRODUCT_IMAGE_DIR) -> list[str]:
-    if not image_dir.exists():
-        return []
-    return sorted({path.name.split("_")[0] for path in image_dir.glob("*.jpg") if "_" in path.name})
-
-
-def load_sample_group(group_id: str, image_dir: Path = PRODUCT_IMAGE_DIR) -> list[ImagePayload]:
-    return [
-        ImagePayload(filename=path.name, image_bytes=path.read_bytes())
-        for path in sorted(image_dir.glob(f"{group_id}_*.jpg"))
-    ]
-
-
-def load_all_sample_payloads(image_dir: Path = PRODUCT_IMAGE_DIR) -> list[ImagePayload]:
-    return [ImagePayload(filename=path.name, image_bytes=path.read_bytes()) for path in sorted(image_dir.glob("*.jpg"))]
 
 
 def remember_payloads(payloads: Iterable[ImagePayload]) -> list:
@@ -180,26 +159,6 @@ def process_reviewed_clusters(clusters: Iterable[ProductImageCluster], pipeline:
             status.write(f"Extracted {group.group_id} from {len(group.images)} image(s)")
     status.write("Checking duplicates")
     status.update(label="Ready for field review", state="complete")
-
-    return processed, errors
-
-
-def process_uploads(files: Iterable["UploadedFile"], pipeline: ExtractionPipeline, store: ProductStore) -> tuple[list[ProductRecord], list[str]]:
-    errors: list[str] = []
-
-    if not files:
-        return [], errors
-
-    image_payloads: list[ImagePayload] = []
-    for upload in files:
-        image_bytes = upload.getvalue()
-        if image_bytes:
-            image_payloads.append(ImagePayload(filename=upload.name, image_bytes=image_bytes))
-        else:
-            errors.append(f"{upload.name}: empty file")
-
-    processed, processing_errors = process_image_payloads(image_payloads, pipeline, store)
-    errors.extend(processing_errors)
 
     return processed, errors
 
@@ -293,18 +252,6 @@ def render_shell_styles() -> None:
     )
 
 
-def add_records_to_store(records: Iterable[ProductRecord], store: ProductStore) -> list[ProductRecord]:
-    loaded = []
-    for record in records:
-        store.upsert(record)
-        loaded.append(record)
-        if record.filename:
-            payloads = load_sample_group(record.filename)
-            if payloads:
-                image_payload_cache()[record.filename] = payloads
-    return loaded
-
-
 def recompute_suggestions(store: ProductStore) -> None:
     set_suggestions(store.merge_suggestions([record.to_dict() for record in store.all()]))
 
@@ -394,8 +341,6 @@ def render_field_editor(record: ProductRecord, attr: str, threshold: float) -> N
 
 def render_record_workspace(record: ProductRecord, threshold: float) -> None:
     st.markdown(f"#### {format_record_name(record)}")
-    if record.metadata.get("demo_fixture"):
-        st.info("Curated demo data loaded from the workbook. Live extraction remains available in Step 2.")
 
     image_col, fields_col = st.columns([0.32, 0.68], gap="large")
     with image_col:
@@ -438,6 +383,9 @@ def validation_rows(records: list[ProductRecord]) -> list[dict]:
 
 def render_merge_suggestions(records: list[ProductRecord], suggestions: list[dict], store: ProductStore) -> None:
     st.markdown("##### Duplicate status")
+    if not records:
+        st.caption("Duplicate checks will appear after extraction.")
+        return
     if not suggestions:
         st.success("No duplicate found")
         return
@@ -668,7 +616,7 @@ def render_row_controls(records: list[ProductRecord], store: ProductStore) -> No
 
 def render_scorecard(records: list[ProductRecord]) -> None:
     if not records:
-        st.caption("Run extraction or load a demo before viewing validation.")
+        st.caption("Run extraction before viewing validation.")
         return
 
     validation = pd.DataFrame(validation_rows(records))
@@ -695,7 +643,7 @@ def render_scorecard(records: list[ProductRecord]) -> None:
 
 def render_export_controls(records: list[ProductRecord], exporter: Exporter) -> None:
     if not records:
-        st.caption("Validated rows will appear here after extraction or curated demo load.")
+        st.caption("Validated rows will appear here after extraction.")
         return
 
     frame = export_frame(records)
@@ -739,32 +687,6 @@ def render_export_controls(records: list[ProductRecord], exporter: Exporter) -> 
 def render_add_images_step(store: ProductStore, pipeline: ExtractionPipeline) -> None:
     st.markdown("### 1. Add Images")
     with st.container(border=True):
-        demo_col, sample_col = st.columns(2)
-        with demo_col:
-            st.markdown("**Curated demo sample**")
-            st.caption("Fast offline path using workbook truth for BAMA, TAPOK, and ZESTA.")
-            if st.button("Use curated demo data", type="primary", width="stretch"):
-                records = add_records_to_store(load_demo_records(), store)
-                recompute_suggestions(store)
-                st.success(f"Loaded {len(records)} curated demo row(s).")
-                st.rerun()
-        with sample_col:
-            st.markdown("**Live sample extraction**")
-            sample_groups = available_sample_groups()
-            selected_group = st.selectbox(
-                "Product group",
-                options=sample_groups,
-                index=sample_groups.index("S230912494") if "S230912494" in sample_groups else 0,
-            )
-            if st.button("Run selected sample live", width="stretch"):
-                processed, errors = process_image_payloads(load_sample_group(selected_group), pipeline, store)
-                if processed:
-                    st.success(f"Processed {len(processed)} sample product group(s).")
-                if errors:
-                    st.error("\n".join(f"- {item}" for item in errors))
-                recompute_suggestions(store)
-                st.rerun()
-
         uploaded_files = st.file_uploader(
             "Upload product images", accept_multiple_files=True, type=["png", "jpg", "jpeg"], key="uploader"
         )
@@ -798,10 +720,9 @@ def render_workflow(records: list[ProductRecord], threshold: float, store: Produ
     st.markdown("### 2. Extract")
     with st.container(border=True):
         if records:
-            fixture_count = sum(1 for record in records if record.metadata.get("demo_fixture"))
-            st.success(f"{len(records)} row(s) ready for review. {fixture_count} row(s) came from curated demo data.")
+            st.success(f"{len(records)} row(s) ready for review.")
         else:
-            st.info("Load curated demo data, run a sample, or upload product photos to start extraction.")
+            st.info("Upload product photos to start extraction.")
 
     st.markdown("### 3. Review Fields")
     with st.container(border=True):
@@ -813,7 +734,7 @@ def render_workflow(records: list[ProductRecord], threshold: float, store: Produ
         else:
             st.caption("Field cards will appear here after Step 1.")
 
-    st.markdown("### 4. Validate & Dedupe")
+    st.markdown("### 4. Validate & Deduplicate")
     with st.container(border=True):
         render_scorecard(records)
         render_merge_suggestions(records, get_suggestions(), store)
@@ -838,7 +759,7 @@ def render_sidebar(provider: str) -> tuple[ExtractionPipeline, float, str | None
     if active_key:
         st.sidebar.success(f"{provider.title()} key detected")
     else:
-        st.sidebar.warning(f"No {provider.title()} API key. Use curated demo data or configure a key for live extraction.")
+        st.sidebar.warning(f"No {provider.title()} API key. Configure a key before running live extraction.")
     st.sidebar.caption(f"Model: {active_model}")
     return pipeline, threshold, active_key
 

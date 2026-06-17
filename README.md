@@ -6,7 +6,6 @@ This project is a Streamlit experience that turns product imagery into the hacka
 
 - **Content-based image grouping** for arbitrary upload filenames using barcode and catalog evidence instead of filename prefixes.
 - **Provider toggle** for Cohere or OpenAI, with Cohere as the default vision provider.
-- **Curated offline demo mode** for BAMA, TAPOK, and ZESTA sample groups, clearly labeled separately from live extraction.
 - **Exact 13-column hackathon export** with `ITEM_NAME`, `BARCODE`, `MANUFACTURER`, `BRAND`, `WEIGHT`, `PACKAGING  TYPE`, `COUNTRY`, `VARIANT`, `TYPE`, `FRAGRANCE_FLAVOR`, `PROMOTION`, `ADDONS`, and `TAGLINE`.
 - **Workbook-style normalization** for uppercase values, pack syntax, compact weights, canonical packaging, country aliases, and checksum-valid barcodes.
 - **Confidence-aware review** with a configurable low-confidence threshold.
@@ -53,7 +52,7 @@ This project is a Streamlit experience that turns product imagery into the hacka
    # or, once dependencies are installed: streamlit run app.py
    ```
 
-4. For a reliable hackathon walkthrough, click **Use curated demo data** on the first screen. This loads workbook-backed rows without requiring API credentials. Use **Run selected sample live** for labeled sample groups, or upload arbitrary product photos and click **Identify product groups** to group by product evidence before extraction.
+4. Upload arbitrary product photos on the first screen and click **Identify product groups**. The app groups images by product evidence before extraction, regardless of where the files came from.
 
 ### Testing
 
@@ -63,15 +62,15 @@ Run the unit suite once dependencies are installed:
 pytest
 ```
 
-Tests focus on the data contract, product-evidence grouping, validation, pack parsing, normalization, evaluation, exporter, pipeline, demo fixtures, and duplicate heuristics. They skip external API calls by stubbing the vision client.
+Tests focus on the data contract, product-evidence grouping, validation, pack parsing, normalization, evaluation, exporter, pipeline, and duplicate heuristics. They skip external API calls by stubbing the vision client.
 
 ### Visual QA
 
 Before recording or presenting, verify the app in Chrome at both desktop and mobile sizes:
 
-- Initial load shows the five-step workflow and the curated demo CTA in the main content.
+- Initial load shows the five-step workflow with upload-first entry into grouping and extraction.
 - Arbitrary uploads show an Identify Product Groups step and reviewable candidate clusters before extraction.
-- Curated demo load shows product thumbnails, editable field cards, validation scorecard, duplicate status, and export preview.
+- Extracted uploads show product thumbnails, editable field cards, validation scorecard, duplicate status, and export preview.
 - A manual field edit persists and updates validation.
 - CSV or Excel generation exposes a visible download button in the main Export step.
 - Mobile width around `390 x 844` has no horizontal overflow and no required action hidden only in the sidebar.

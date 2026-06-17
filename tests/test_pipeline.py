@@ -165,3 +165,30 @@ async def test_pipeline_raises_provider_config_error_for_group(sample_image_byte
 
     with pytest.raises(ProviderConfigurationError, match="Missing API key for selected provider 'cohere'"):
         await pipeline.process_group(group)
+
+
+def test_get_pipeline_rebuilds_for_different_model_keys(monkeypatch):
+    created: list[str] = []
+
+    class TrackingClient:
+        async def extract(self, image_bytes: bytes, filename: str | None = None) -> ProductRecord:
+            raise NotImplementedError
+
+        async def extract_group(self, images: list[tuple[str, bytes]], group_id: str | None = None) -> ProductRecord:
+            raise NotImplementedError
+
+    def fake_get_vlm_client(model_key: str):
+        created.append(model_key)
+        return TrackingClient()
+
+    monkeypatch.setattr(pipeline_module, "_pipeline", None)
+    monkeypatch.setattr(pipeline_module, "_pipeline_model_key", None)
+    monkeypatch.setattr(pipeline_module, "get_vlm_client", fake_get_vlm_client)
+
+    first = pipeline_module.get_pipeline("cohere-command-a-vision-07-2025")
+    second = pipeline_module.get_pipeline("cohere-command-a-vision-07-2025")
+    third = pipeline_module.get_pipeline("hf-qwen3-vl-235b-a22b-instruct")
+
+    assert first is second
+    assert third is not first
+    assert created == ["cohere-command-a-vision-07-2025", "hf-qwen3-vl-235b-a22b-instruct"]

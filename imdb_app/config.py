@@ -21,9 +21,9 @@ class Settings(BaseSettings):
         default="command-a-vision-07-2025",
         validation_alias=AliasChoices("COHERE_MODEL", "cohere_model"),
     )
-    openai_api_key: str | None = Field(
+    OPENAI_KEY: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("OPENAI_API_KEY", "openai_api_key", "VLM_API_KEY", "vlm_api_key"),
+        validation_alias=AliasChoices("OPENAI_KEY", "OPENAI_KEY", "VLM_API_KEY", "vlm_api_key"),
     )
     openai_api_url: AnyHttpUrl | None = Field(
         default="https://api.openai.com/v1/responses",
@@ -32,6 +32,15 @@ class Settings(BaseSettings):
     openai_model: str = Field(
         default="gpt-4o-mini",
         validation_alias=AliasChoices("OPENAI_MODEL", "openai_model", "VLM_MODEL", "vlm_model"),
+    )
+    hf_token: str | None = Field(default=None, validation_alias=AliasChoices("HF_TOKEN", "hf_token"))
+    hf_api_url: AnyHttpUrl | None = Field(
+        default="https://router.huggingface.co/v1/chat/completions",
+        validation_alias=AliasChoices("HF_API_URL", "hf_api_url"),
+    )
+    default_model_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DEFAULT_MODEL_KEY", "default_model_key"),
     )
     request_timeout_seconds: int = Field(
         default=60,
@@ -58,7 +67,7 @@ class Settings(BaseSettings):
     def vlm_api_key(self) -> str | None:
         """Backward-compatible alias for the OpenAI API key."""
 
-        return self.openai_api_key
+        return self.OPENAI_KEY
 
     @property
     def vlm_api_url(self) -> AnyHttpUrl | None:

@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, Protocol
 import httpx
 
 from .config import settings
+from .model_catalog import ModelProfile, get_model_profile
 from .models import Attribute, IMDB_ATTRIBUTES, ProductRecord
 
 
@@ -239,7 +240,7 @@ class OpenAIVLMClient(BaseVLMClient):
 
     def __init__(self, *, api_key: Optional[str] = None, api_url: Optional[str] = None, model: str | None = None) -> None:
         super().__init__(
-            api_key=api_key if api_key is not None else settings.openai_api_key,
+            api_key=api_key if api_key is not None else settings.OPENAI_KEY,
             api_url=api_url or str(settings.openai_api_url),
             model=model or settings.openai_model,
         )
@@ -300,7 +301,7 @@ class OpenAIVLMClient(BaseVLMClient):
         return ProductRecord(id=record_id, filename=filename, filenames=filenames or [], **attributes_from_payload(payload or {}))
 
     def _missing_api_key_message(self) -> str:
-        return "Missing API key for selected provider 'openai'. Set OPENAI_API_KEY or switch providers."
+        return "Missing API key for selected provider 'openai'. Set OPENAI_KEY or switch providers."
 
 
 class CohereVLMClient(BaseVLMClient):
@@ -358,19 +359,92 @@ class CohereVLMClient(BaseVLMClient):
         return "Missing API key for selected provider 'cohere'. Set COHERE_API_KEY or switch providers."
 
 
+class HuggingFaceRouterVLMClient(BaseVLMClient):
+    provider = "huggingface"
+
+    def __init__(self, *, api_key: Optional[str] = None, api_url: Optional[str] = None, model: str) -> None:
+        super().__init__(
+            api_key=api_key if api_key is not None else settings.hf_token,
+            api_url=api_url or str(settings.hf_api_url),
+            model=model,
+        )
+
+    def _build_payload(self, images: list[tuple[str, bytes]], group_id: str | None) -> Dict[str, Any]:
+        user_content: list[dict[str, Any]] = [
+            {"type": "text", "text": f"Product group: {group_id or 'unknown'}"},
+            {"type": "text", "text": "Inspect all images together and produce one product-level row."},
+        ]
+        for filename, image_bytes in images:
+            user_content.extend(
+                [
+                    {"type": "text", "text": f"Image filename: {filename}"},
+                    {"type": "image_url", "image_url": {"url": image_data_url(image_bytes)}},
+                ]
+            )
+
+        return {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": PROMPT_TEMPLATE},
+                {"role": "user", "content": user_content},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "imdb_schema",
+                    "schema": build_imdb_schema(),
+                    "strict": True,
+                },
+            },
+        }
+
+    def _parse_response(self, response: Dict[str, Any], filename: str | None, filenames: list[str] | None = None) -> ProductRecord:
+        record_id = response.get("id") or os.urandom(8).hex()
+        payload: Dict[str, Any] = {}
+        choices = response.get("choices")
+
+        if isinstance(choices, list):
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                message = choice.get("message")
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                if isinstance(content, str):
+                    payload = json.loads(content)
+                    break
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") in {"output_text", "text"} and isinstance(item.get("text"), str):
+                            payload = json.loads(item["text"])
+                            break
+                    if payload:
+                        break
+
+        return ProductRecord(id=record_id, filename=filename, filenames=filenames or [], **attributes_from_payload(payload or {}))
+
+    def _missing_api_key_message(self) -> str:
+        return "Missing API key for selected provider 'huggingface'. Set HF_TOKEN or switch models."
+
+
 VLMClient = OpenAIVLMClient
 
 
 def normalize_provider(provider: str | None) -> str:
-    normalized = (provider or settings.vlm_provider or "cohere").strip().lower()
-    if normalized not in {"cohere", "openai"}:
-        msg = f"Unsupported VLM provider: {provider}"
-        raise ValueError(msg)
-    return normalized
+    return get_model_profile(provider).key
+
+
+def _client_for_profile(profile: ModelProfile) -> SupportsVLMExtraction:
+    if profile.backend == "cohere_direct":
+        return CohereVLMClient(model=profile.model_id)
+    if profile.backend == "openai_direct":
+        return OpenAIVLMClient(model=profile.model_id)
+    if profile.backend == "hf_router":
+        return HuggingFaceRouterVLMClient(model=profile.model_id)
+    msg = f"Unsupported backend: {profile.backend}"
+    raise ValueError(msg)
 
 
 def get_vlm_client(provider: str | None = None) -> SupportsVLMExtraction:
-    normalized = normalize_provider(provider)
-    if normalized == "cohere":
-        return CohereVLMClient()
-    return OpenAIVLMClient()
+    return _client_for_profile(get_model_profile(provider))

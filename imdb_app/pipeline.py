@@ -19,6 +19,7 @@ from .normalizer import normalize_record
 from .validators import validate_barcode
 from .vlm_client import SupportsVLMExtraction, get_vlm_client, normalize_provider
 from .barcode import extract_barcode
+from .config import settings
 from .exporter import Exporter
 from .grouping import ImageEvidence, ImageGroup, ImagePayload, hash_image_bytes
 
@@ -152,7 +153,13 @@ class ExtractionPipeline:
                 missing.append(payload)
 
         if missing:
-            analyzed = await asyncio.gather(*(self.analyze_image_for_grouping(payload) for payload in missing))
+            semaphore = asyncio.Semaphore(max(1, settings.group_processing_concurrency))
+
+            async def analyze_with_limit(payload: ImagePayload) -> ImageEvidence:
+                async with semaphore:
+                    return await self.analyze_image_for_grouping(payload)
+
+            analyzed = await asyncio.gather(*(analyze_with_limit(payload) for payload in missing))
             for payload, item in zip(missing, analyzed):
                 cache[item.image_hash] = item
                 evidence.append(
@@ -231,15 +238,15 @@ class ExtractionPipeline:
 
 
 _pipeline: ExtractionPipeline | None = None
-_pipeline_provider: str | None = None
+_pipeline_model_key: str | None = None
 
 
 def get_pipeline(provider: str | None = None) -> ExtractionPipeline:
-    global _pipeline, _pipeline_provider
-    normalized_provider = normalize_provider(provider)
-    if _pipeline is None or _pipeline_provider != normalized_provider:
-        _pipeline = ExtractionPipeline(client=get_vlm_client(normalized_provider))
-        _pipeline_provider = normalized_provider
+    global _pipeline, _pipeline_model_key
+    normalized_model_key = normalize_provider(provider)
+    if _pipeline is None or _pipeline_model_key != normalized_model_key:
+        _pipeline = ExtractionPipeline(client=get_vlm_client(normalized_model_key))
+        _pipeline_model_key = normalized_model_key
     return _pipeline
 
 

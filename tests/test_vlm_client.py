@@ -9,6 +9,7 @@ from imdb_app.models import IMDB_ATTRIBUTES
 import imdb_app.vlm_client as vlm_client
 from imdb_app.vlm_client import (
     CohereVLMClient,
+    HuggingFaceRouterVLMClient,
     OpenAIVLMClient,
     ProviderConfigurationError,
     VLMClient,
@@ -103,15 +104,65 @@ def test_cohere_response_coerces_string_attribute_value():
 def test_provider_factory_defaults_to_supported_clients():
     assert isinstance(get_vlm_client("cohere"), CohereVLMClient)
     assert isinstance(get_vlm_client("openai"), OpenAIVLMClient)
+    assert isinstance(get_vlm_client("hf-qwen3-vl-235b-a22b-instruct"), HuggingFaceRouterVLMClient)
     assert isinstance(VLMClient(api_key="test"), OpenAIVLMClient)
-    assert normalize_provider("COHERE") == "cohere"
+    assert normalize_provider("COHERE") == "cohere-command-a-vision-07-2025"
+
+
+def test_hf_router_payload_uses_openai_compatible_chat_schema():
+    client = HuggingFaceRouterVLMClient(
+        api_key="test",
+        api_url="https://router.huggingface.co/v1/chat/completions",
+        model="Qwen/Qwen3-VL-235B-A22B-Instruct",
+    )
+
+    payload = client._build_payload(images=[("S1_1.jpg", b"image")], group_id="S1")
+
+    assert payload["model"] == "Qwen/Qwen3-VL-235B-A22B-Instruct"
+    assert payload["messages"][0]["role"] == "system"
+    assert payload["messages"][1]["role"] == "user"
+    assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"]["json_schema"]["strict"] is True
+    assert any(item["type"] == "image_url" for item in payload["messages"][1]["content"])
+
+
+def test_hf_router_response_parses_chat_completion_message():
+    client = HuggingFaceRouterVLMClient(
+        api_key="test",
+        api_url="https://router.huggingface.co/v1/chat/completions",
+        model="zai-org/GLM-4.6V-Flash",
+    )
+    payload = {name: {"value": None, "confidence": 0.0, "source": "test", "notes": None} for name in IMDB_ATTRIBUTES}
+    payload["brand"]["value"] = "ZESTA"
+    response = {
+        "id": "hf-id",
+        "choices": [{"message": {"content": json.dumps(payload)}}],
+    }
+
+    record = client._parse_response(response, filename="auto-001", filenames=["a.jpg"])
+
+    assert record.id == "hf-id"
+    assert record.brand.value == "ZESTA"
+    assert record.filename == "auto-001"
+
+
+@pytest.mark.asyncio
+async def test_hf_router_client_raises_clear_error_when_api_key_missing():
+    client = HuggingFaceRouterVLMClient(
+        api_key="",
+        api_url="https://router.huggingface.co/v1/chat/completions",
+        model="Qwen/Qwen3-VL-235B-A22B-Instruct",
+    )
+
+    with pytest.raises(ProviderConfigurationError, match="Set HF_TOKEN or switch models"):
+        await client.extract_group(images=[("S1_1.jpg", b"image")], group_id="S1")
 
 
 @pytest.mark.asyncio
 async def test_openai_client_raises_clear_error_when_api_key_missing():
     client = OpenAIVLMClient(api_key="", api_url="https://api.openai.com/v1/responses")
 
-    with pytest.raises(ProviderConfigurationError, match="Set OPENAI_API_KEY or switch providers"):
+    with pytest.raises(ProviderConfigurationError, match="Set OPENAI_KEY or switch providers"):
         await client.extract_group(images=[("S1_1.jpg", b"image")], group_id="S1")
 
 

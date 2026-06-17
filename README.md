@@ -34,7 +34,7 @@ This project is a Streamlit experience that turns product imagery into the hacka
    | `VLM_PROVIDER` | Default provider in the sidebar: `cohere` or `openai` (defaults to `cohere`). |
    | `COHERE_API_KEY` | Cohere API key for the default vision model. |
    | `COHERE_MODEL` | Cohere model name (defaults to `command-a-vision-07-2025`). |
-   | `OPENAI_API_KEY` | Optional OpenAI API key for the fallback provider. Existing `VLM_API_KEY` still works as an alias. |
+   | `OPENAI_KEY` | Optional OpenAI API key for the fallback provider. Existing `VLM_API_KEY` still works as an alias. |
    | `OPENAI_MODEL` | Optional OpenAI model name. Existing `VLM_MODEL` still works as an alias. |
    | `REQUEST_TIMEOUT_SECONDS` | Timeout for outbound model requests. |
    | `CONFIDENCE_THRESHOLD` | Initial threshold for highlighting low-confidence fields. |

@@ -114,7 +114,7 @@ def test_infer_product_groups_clusters_strong_non_barcode_evidence():
     assert clusters[0].needs_review is False
 
 
-def test_infer_product_groups_separates_similar_names_with_different_weight():
+def test_infer_product_groups_clusters_same_item_name_and_brand_even_with_different_weight():
     first = ImagePayload(filename="small.png", image_bytes=b"1")
     second = ImagePayload(filename="large.png", image_bytes=b"2")
     images = [first, second]
@@ -143,8 +143,41 @@ def test_infer_product_groups_separates_similar_names_with_different_weight():
 
     clusters = infer_product_groups(images, evidence)
 
-    assert len(clusters) == 2
-    assert all(cluster.needs_review for cluster in clusters)
+    assert len(clusters) == 1
+    assert clusters[0].group_id == "auto-001"
+    assert clusters[0].needs_review is False
+
+
+def test_infer_product_groups_clusters_same_item_name_without_brand_match():
+    first = ImagePayload(filename="front.png", image_bytes=b"1")
+    second = ImagePayload(filename="back.png", image_bytes=b"2")
+    images = [first, second]
+    evidence = {
+        first.payload_id: ImageEvidence(
+            payload_id=first.payload_id,
+            filename="front.png",
+            image_hash="h1",
+            brand="ALPHA",
+            item_name="POMO TOMATO MIX",
+            weight="60G",
+            confidence=0.8,
+        ),
+        second.payload_id: ImageEvidence(
+            payload_id=second.payload_id,
+            filename="back.png",
+            image_hash="h2",
+            brand=None,
+            item_name="POMO TOMATO MIX",
+            weight="380G",
+            confidence=0.8,
+        ),
+    }
+
+    clusters = infer_product_groups(images, evidence)
+
+    assert len(clusters) == 1
+    assert clusters[0].group_id == "auto-001"
+    assert clusters[0].needs_review is False
 
 
 def test_infer_product_groups_keeps_duplicate_filenames_distinct():

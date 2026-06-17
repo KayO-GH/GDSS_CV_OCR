@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import uuid
+from pathlib import Path
 from typing import Iterable, TYPE_CHECKING
 
 import pandas as pd
@@ -22,6 +23,7 @@ from imdb_app.grouping import (
     group_images_by_filename_prefix,
     infer_product_groups,
 )
+from imdb_app.model_catalog import available_model_profiles, get_model_profile, resolve_default_model_key, selected_or_first_available
 from imdb_app.normalizer import normalize_record
 from imdb_app.pack_parser import parse_pack_text
 from imdb_app.pipeline import ExtractionPipeline, get_pipeline
@@ -53,12 +55,12 @@ def get_store() -> ProductStore:
     return st.session_state.store
 
 
-def get_pipeline_instance(provider: str) -> ExtractionPipeline:
-    if st.session_state.get("pipeline_provider") != provider:
+def get_pipeline_instance(model_key: str) -> ExtractionPipeline:
+    if st.session_state.get("pipeline_model_key") != model_key:
         st.session_state.pop("pipeline", None)
-        st.session_state.pipeline_provider = provider
+        st.session_state.pipeline_model_key = model_key
     if "pipeline" not in st.session_state:
-        st.session_state.pipeline = get_pipeline(provider)
+        st.session_state.pipeline = get_pipeline(model_key)
     return st.session_state.pipeline
 
 
@@ -175,13 +177,45 @@ def payloads_from_uploads(files: Iterable["UploadedFile"]) -> tuple[list[ImagePa
     return payloads, errors
 
 
-def identify_product_groups(payloads: list[ImagePayload], pipeline: ExtractionPipeline) -> tuple[list[ProductImageCluster], list[str]]:
+def prefix_group_clusters(payloads: Iterable[ImagePayload]) -> list[ProductImageCluster]:
+    groups = group_images_by_filename_prefix(payloads)
+    if not any(len(group.images) > 1 for group in groups):
+        return []
+
+    return [
+        ProductImageCluster(
+            group_id=group.group_id,
+            images=group.images,
+            evidence=[],
+            confidence=1.0,
+            reason="matching filename prefix",
+            needs_review=False,
+        )
+        for group in groups
+    ]
+
+
+def identify_product_groups(
+    payloads: list[ImagePayload],
+    pipeline: ExtractionPipeline,
+    *,
+    consider_filename_prefixes: bool,
+) -> tuple[list[ProductImageCluster], list[str]]:
     errors: list[str] = []
     if not payloads:
         return [], errors
 
     st.session_state.uploaded_image_payloads = payloads
-    status = st.status("Identifying product groups from image evidence", expanded=True)
+    status = st.status("Identifying product groups", expanded=True)
+    if consider_filename_prefixes:
+        clusters = prefix_group_clusters(payloads)
+        if clusters:
+            st.session_state.inferred_image_clusters = clusters
+            status.write("Grouped by filename prefix")
+            status.write(f"Created {len(clusters)} candidate product group(s)")
+            status.update(label="Grouped by filename prefix", state="complete")
+            return clusters, errors
+
     status.write(f"Analyzing {len(payloads)} image(s) independently")
     try:
         evidence = asyncio.run(pipeline.analyze_images_for_grouping(payloads, grouping_evidence_cache()))
@@ -192,8 +226,9 @@ def identify_product_groups(payloads: list[ImagePayload], pipeline: ExtractionPi
     evidence_by_payload_id = {item.payload_id: item for item in evidence}
     clusters = infer_product_groups(payloads, evidence_by_payload_id)
     st.session_state.inferred_image_clusters = clusters
+    status.write("Grouped by image evidence")
     status.write(f"Created {len(clusters)} candidate product group(s)")
-    status.update(label="Product groups ready for review", state="complete")
+    status.update(label="Grouped by image evidence", state="complete")
     return clusters, errors
 
 
@@ -225,7 +260,6 @@ def render_shell_styles() -> None:
         """
         <style>
         .block-container {padding-top: 1.7rem; padding-bottom: 3rem;}
-        div[data-testid="stToolbar"] {display: none;}
         .gdss-step {
             border: 1px solid rgba(49, 51, 63, 0.18);
             border-radius: 8px;
@@ -256,14 +290,14 @@ def recompute_suggestions(store: ProductStore) -> None:
     set_suggestions(store.merge_suggestions([record.to_dict() for record in store.all()]))
 
 
-def render_header(records: list[ProductRecord], provider: str, active_key: str | None) -> None:
+def render_header(records: list[ProductRecord], model_label: str, active_key: str | None) -> None:
     st.title("IMDB Auto-Fill")
     st.caption("Product photos to reviewed, validated, database-ready item-master rows.")
     cols = st.columns(4)
     cols[0].metric("Rows", len(records))
     cols[1].metric("Required complete", f"{required_completion(records):.0%}" if records else "0%")
     cols[2].metric("Open issues", count_review_issues(records))
-    cols[3].metric("Provider", provider.title(), "key detected" if active_key else "missing key")
+    cols[3].metric("Model", model_label, "key detected" if active_key else "missing key")
 
 
 def required_completion(records: list[ProductRecord]) -> float:
@@ -464,6 +498,16 @@ def _make_manual_cluster(group_id: str, images: list[ImagePayload], evidence: li
     )
 
 
+def _next_manual_group_id(clusters: Iterable[ProductImageCluster], prefix: str) -> str:
+    used_ids = {cluster.group_id for cluster in clusters}
+    counter = 1
+    while True:
+        candidate = f"{prefix}-{counter:03d}"
+        if candidate not in used_ids:
+            return candidate
+        counter += 1
+
+
 def render_group_review(clusters: list[ProductImageCluster]) -> list[ProductImageCluster]:
     st.markdown("##### Review inferred product groups")
     if not clusters:
@@ -490,7 +534,6 @@ def render_group_review(clusters: list[ProductImageCluster]) -> list[ProductImag
             if st.button("Split group", disabled=not split_label, width="stretch"):
                 split_id = group_options[split_label]
                 updated: list[ProductImageCluster] = []
-                counter = 1
                 for cluster in clusters:
                     if cluster.group_id != split_id:
                         updated.append(cluster)
@@ -499,13 +542,12 @@ def render_group_review(clusters: list[ProductImageCluster]) -> list[ProductImag
                         evidence = _evidence_for_image(cluster, image)
                         updated.append(
                             _make_manual_cluster(
-                                f"review-split-{counter:03d}",
+                                _next_manual_group_id([*updated, *clusters], "review-split"),
                                 [image],
                                 [evidence] if evidence else [],
                                 "manually split for review",
                             )
                         )
-                        counter += 1
                 st.session_state.inferred_image_clusters = updated
                 st.rerun()
 
@@ -522,7 +564,14 @@ def render_group_review(clusters: list[ProductImageCluster]) -> list[ProductImag
                         merged_evidence.extend(cluster.evidence)
                     else:
                         updated.append(cluster)
-                updated.append(_make_manual_cluster("auto-merged-001", merged_images, merged_evidence, "manually merged by reviewer"))
+                updated.append(
+                    _make_manual_cluster(
+                        _next_manual_group_id([*updated, *clusters], "auto-merged"),
+                        merged_images,
+                        merged_evidence,
+                        "manually merged by reviewer",
+                    )
+                )
                 st.session_state.inferred_image_clusters = updated
                 st.rerun()
 
@@ -614,7 +663,7 @@ def render_row_controls(records: list[ProductRecord], store: ProductStore) -> No
                 st.rerun()
 
 
-def render_scorecard(records: list[ProductRecord]) -> None:
+def render_scorecard(records: list[ProductRecord], enable_hackathon_benchmark: bool) -> None:
     if not records:
         st.caption("Run extraction before viewing validation.")
         return
@@ -628,7 +677,8 @@ def render_scorecard(records: list[ProductRecord]) -> None:
     metrics[3].metric("Columns", len(EXPORT_COLUMNS))
     st.dataframe(validation, width="stretch", hide_index=True)
 
-    if GROUND_TRUTH_PATH.exists():
+    if enable_hackathon_benchmark and GROUND_TRUTH_PATH.exists():
+        st.markdown("##### Hackathon workbook comparison")
         aligned = evaluate_aligned_records(records)
         row_order = evaluate_records(records)
         eval_cols = st.columns(3)
@@ -684,7 +734,7 @@ def render_export_controls(records: list[ProductRecord], exporter: Exporter) -> 
             st.caption(str(export_path))
 
 
-def render_add_images_step(store: ProductStore, pipeline: ExtractionPipeline) -> None:
+def render_add_images_step(store: ProductStore, pipeline: ExtractionPipeline, consider_filename_prefixes: bool) -> None:
     st.markdown("### 1. Add Images")
     with st.container(border=True):
         uploaded_files = st.file_uploader(
@@ -694,10 +744,17 @@ def render_add_images_step(store: ProductStore, pipeline: ExtractionPipeline) ->
             preview_payloads, upload_errors = payloads_from_uploads(uploaded_files)
             if upload_errors:
                 st.error("\n".join(f"- {item}" for item in upload_errors))
-            st.caption("Uploaded images are grouped by product evidence. Filenames are retained only for display.")
+            if consider_filename_prefixes:
+                st.caption("Matching file name prefixes are used first, then the app falls back to image evidence grouping.")
+            else:
+                st.caption("File name prefixes are ignored. Uploaded images are grouped by product evidence.")
             st.write(f"{len(preview_payloads)} image(s) ready for product-group identification.")
             if st.button("Identify product groups", width="stretch"):
-                clusters, errors = identify_product_groups(preview_payloads, pipeline)
+                clusters, errors = identify_product_groups(
+                    preview_payloads,
+                    pipeline,
+                    consider_filename_prefixes=consider_filename_prefixes,
+                )
                 if clusters:
                     st.success(f"Identified {len(clusters)} candidate product group(s). Review them before extraction.")
                 if errors:
@@ -716,7 +773,13 @@ def render_add_images_step(store: ProductStore, pipeline: ExtractionPipeline) ->
                 st.rerun()
 
 
-def render_workflow(records: list[ProductRecord], threshold: float, store: ProductStore, exporter: Exporter) -> None:
+def render_workflow(
+    records: list[ProductRecord],
+    threshold: float,
+    store: ProductStore,
+    exporter: Exporter,
+    enable_hackathon_benchmark: bool,
+) -> None:
     st.markdown("### 2. Extract")
     with st.container(border=True):
         if records:
@@ -736,7 +799,7 @@ def render_workflow(records: list[ProductRecord], threshold: float, store: Produ
 
     st.markdown("### 4. Validate & Deduplicate")
     with st.container(border=True):
-        render_scorecard(records)
+        render_scorecard(records, enable_hackathon_benchmark)
         render_merge_suggestions(records, get_suggestions(), store)
 
     st.markdown("### 5. Export")
@@ -744,9 +807,10 @@ def render_workflow(records: list[ProductRecord], threshold: float, store: Produ
         render_export_controls(records, exporter)
 
 
-def render_sidebar(provider: str) -> tuple[ExtractionPipeline, float, str | None]:
+def render_sidebar(model_key: str) -> tuple[ExtractionPipeline, float, bool, bool, str | None, str]:
     st.sidebar.subheader("Advanced configuration")
-    pipeline = get_pipeline_instance(provider)
+    profile = get_model_profile(model_key)
+    pipeline = get_pipeline_instance(profile.key)
     threshold = st.sidebar.slider(
         "Low confidence threshold",
         min_value=0.0,
@@ -754,14 +818,22 @@ def render_sidebar(provider: str) -> tuple[ExtractionPipeline, float, str | None
         value=settings.default_confidence_threshold,
         step=0.05,
     )
-    active_key = settings.cohere_api_key if provider == "cohere" else settings.openai_api_key
-    active_model = settings.cohere_model if provider == "cohere" else settings.openai_model
+    consider_filename_prefixes = st.sidebar.toggle("Consider file name prefixes", value=True)
+    enable_hackathon_benchmark = st.sidebar.toggle("Enable hackathon benchmark", value=False)
+    active_key = profile.credential_value
     if active_key:
-        st.sidebar.success(f"{provider.title()} key detected")
+        st.sidebar.success(f"{profile.provider_label} key detected")
     else:
-        st.sidebar.warning(f"No {provider.title()} API key. Configure a key before running live extraction.")
-    st.sidebar.caption(f"Model: {active_model}")
-    return pipeline, threshold, active_key
+        st.sidebar.warning(f"No {profile.provider_label} key. Configure a key before running live extraction.")
+    st.sidebar.caption(f"Model: {profile.model_id}")
+    return pipeline, threshold, consider_filename_prefixes, enable_hackathon_benchmark, active_key, profile.label
+
+
+def visible_model_profiles() -> list:
+    profiles = available_model_profiles(include_unavailable_visible=False)
+    if profiles:
+        return profiles
+    return [selected_or_first_available(resolve_default_model_key())]
 
 
 def main() -> None:
@@ -769,15 +841,20 @@ def main() -> None:
     store = get_store()
     exporter = st.session_state.setdefault("exporter", Exporter())
 
-    configured_provider = settings.vlm_provider.strip().lower()
-    default_provider = configured_provider if configured_provider in {"cohere", "openai"} else "cohere"
-    provider = st.sidebar.radio(
-        "Model provider",
-        options=["cohere", "openai"],
-        index=["cohere", "openai"].index(default_provider),
-        horizontal=True,
+    profiles = visible_model_profiles()
+    profile_labels = [profile.label for profile in profiles]
+    default_profile = selected_or_first_available(resolve_default_model_key())
+    if default_profile.label not in profile_labels:
+        default_profile = profiles[0]
+    selected_label = st.sidebar.selectbox(
+        "Extraction model",
+        options=profile_labels,
+        index=profile_labels.index(default_profile.label),
     )
-    pipeline, threshold, active_key = render_sidebar(provider)
+    selected_profile = next(profile for profile in profiles if profile.label == selected_label)
+    pipeline, threshold, consider_filename_prefixes, enable_hackathon_benchmark, active_key, model_label = render_sidebar(
+        selected_profile.key
+    )
 
     if st.sidebar.button("Clear workspace", type="secondary", width="stretch"):
         store.clear()
@@ -795,9 +872,9 @@ def main() -> None:
         recompute_suggestions(store)
         st.rerun()
 
-    render_header(records, provider, active_key)
-    render_add_images_step(store, pipeline)
-    render_workflow(store.all(), threshold, store, exporter)
+    render_header(records, model_label, active_key)
+    render_add_images_step(store, pipeline, consider_filename_prefixes)
+    render_workflow(store.all(), threshold, store, exporter, enable_hackathon_benchmark)
 
 
 if __name__ == "__main__":

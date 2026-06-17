@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 import app
 from imdb_app.exporter import Exporter
 from imdb_app.grouping import ImageEvidence, ImagePayload, ProductImageCluster
@@ -12,12 +13,16 @@ from imdb_app.store import ProductStore
 class _DummyStatus:
     writes: list[str]
     updated: bool = False
+    label: str | None = None
+    state: str | None = None
 
     def write(self, message: str) -> None:
         self.writes.append(message)
 
-    def update(self, **_kwargs) -> None:
+    def update(self, **kwargs) -> None:
         self.updated = True
+        self.label = kwargs.get("label")
+        self.state = kwargs.get("state")
 
 
 class _DummyStatusFactory:
@@ -38,6 +43,25 @@ class _PipelineStub:
             filenames=[image.filename for image in group.images],
             item_name=Attribute(value=group.group_id, confidence=1.0, source="stub"),
         )
+
+
+class _GroupingPipelineStub:
+    def __init__(self, evidence: list[ImageEvidence]) -> None:
+        self.evidence = evidence
+        self.called = False
+
+    async def analyze_images_for_grouping(self, payloads, cache=None) -> list[ImageEvidence]:
+        del payloads, cache
+        self.called = True
+        return self.evidence
+
+
+class _DummyMetric:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str | None]] = []
+
+    def metric(self, label: str, value, delta=None) -> None:
+        self.calls.append((label, str(value), None if delta is None else str(delta)))
 
 
 def test_process_image_payloads_processes_all_groups(monkeypatch):
@@ -95,10 +119,250 @@ def test_render_workflow_empty_state_does_not_claim_duplicate_found(monkeypatch)
     monkeypatch.setattr(app, "render_export_controls", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(app, "get_suggestions", lambda: [])
 
-    app.render_workflow([], 0.55, ProductStore(), Exporter())
+    app.render_workflow([], 0.55, ProductStore(), Exporter(), False)
 
     assert "Duplicate checks will appear after extraction." in captions
     assert "No duplicate found" not in successes
+
+
+def test_render_scorecard_skips_benchmark_when_disabled(monkeypatch):
+    captions: list[str] = []
+    markdowns: list[str] = []
+    metric_sets: list[_DummyMetric] = []
+
+    def fake_columns(count: int):
+        columns = [_DummyMetric() for _ in range(count)]
+        metric_sets.extend(columns)
+        return columns
+
+    monkeypatch.setattr(app.st, "columns", fake_columns)
+    monkeypatch.setattr(app.st, "dataframe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app.st, "caption", lambda message: captions.append(message))
+    monkeypatch.setattr(app.st, "markdown", lambda message, **_kwargs: markdowns.append(message))
+    monkeypatch.setattr(app, "evaluate_aligned_records", lambda records: (_ for _ in ()).throw(AssertionError("should not run")))
+    monkeypatch.setattr(app, "evaluate_records", lambda records: (_ for _ in ()).throw(AssertionError("should not run")))
+
+    records = [
+        ProductRecord(
+            id="one",
+            item_name=Attribute(value="ITEM ONE"),
+            barcode=Attribute(value="6034000482027"),
+            manufacturer=Attribute(value="ACME"),
+            brand=Attribute(value="BRAND"),
+            weight=Attribute(value="200G"),
+            packaging_type=Attribute(value="BOX"),
+            country=Attribute(value="GHANA"),
+            type=Attribute(value="SNACK"),
+        )
+    ]
+
+    app.render_scorecard(records, enable_hackathon_benchmark=False)
+
+    labels = [label for metric in metric_sets for label, *_ in metric.calls]
+    assert "Field completion" in labels
+    assert "Ground-truth aligned rows" not in labels
+    assert "Hackathon workbook comparison" not in markdowns
+    assert not any("Ground-truth match is shown only for aligned rows" in caption for caption in captions)
+
+
+def test_render_scorecard_renders_benchmark_when_enabled(monkeypatch):
+    captions: list[str] = []
+    markdowns: list[str] = []
+    metric_sets: list[_DummyMetric] = []
+
+    def fake_columns(count: int):
+        columns = [_DummyMetric() for _ in range(count)]
+        metric_sets.extend(columns)
+        return columns
+
+    monkeypatch.setattr(app.st, "columns", fake_columns)
+    monkeypatch.setattr(app.st, "dataframe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app.st, "caption", lambda message: captions.append(message))
+    monkeypatch.setattr(app.st, "markdown", lambda message, **_kwargs: markdowns.append(message))
+    monkeypatch.setattr(app, "GROUND_TRUTH_PATH", SimpleNamespace(exists=lambda: True))
+
+    class _Eval:
+        aligned_count = 1
+        row_count = 2
+        normalized_accuracy = 0.31
+
+    class _RowOrder:
+        normalized_accuracy = 0.15
+
+    calls = {"aligned": 0, "row_order": 0}
+
+    def fake_aligned(records):
+        calls["aligned"] += 1
+        return _Eval()
+
+    def fake_row_order(records):
+        calls["row_order"] += 1
+        return _RowOrder()
+
+    monkeypatch.setattr(app, "evaluate_aligned_records", fake_aligned)
+    monkeypatch.setattr(app, "evaluate_records", fake_row_order)
+
+    records = [
+        ProductRecord(
+            id="one",
+            item_name=Attribute(value="ITEM ONE"),
+            barcode=Attribute(value="6034000482027"),
+            manufacturer=Attribute(value="ACME"),
+            brand=Attribute(value="BRAND"),
+            weight=Attribute(value="200G"),
+            packaging_type=Attribute(value="BOX"),
+            country=Attribute(value="GHANA"),
+            type=Attribute(value="SNACK"),
+        )
+    ]
+
+    app.render_scorecard(records, enable_hackathon_benchmark=True)
+
+    labels = [label for metric in metric_sets for label, *_ in metric.calls]
+    assert calls == {"aligned": 1, "row_order": 1}
+    assert "Ground-truth aligned rows" in labels
+    assert any("Hackathon workbook comparison" in item for item in markdowns)
+    assert any("Ground-truth match is shown only for aligned rows" in caption for caption in captions)
+
+
+def test_visible_model_profiles_only_show_usable_entries(monkeypatch):
+    monkeypatch.setattr(app.settings, "cohere_api_key", "cohere-key")
+    monkeypatch.setattr(app.settings, "hf_token", "hf-key")
+    monkeypatch.setattr(app.settings, "OPENAI_KEY", None)
+
+    profiles = app.visible_model_profiles()
+
+    assert [profile.key for profile in profiles] == [
+        "cohere-command-a-vision-07-2025",
+        "hf-qwen3-vl-235b-a22b-instruct",
+        "hf-glm-4-6v-flash",
+    ]
+
+
+def test_identify_product_groups_uses_filename_prefixes_when_toggle_enabled(monkeypatch):
+    status_factory = _DummyStatusFactory()
+    monkeypatch.setattr(app.st, "status", status_factory)
+
+    class _NoEvidencePipeline:
+        async def analyze_images_for_grouping(self, payloads, cache=None):
+            raise AssertionError("evidence grouping should not run when usable prefixes exist")
+
+    payloads = [
+        ImagePayload(filename="S227094844_568727218.jpg", image_bytes=b"4"),
+        ImagePayload(filename="S227303151_569242991.jpg", image_bytes=b"8"),
+        ImagePayload(filename="S227303151_569242988.jpg", image_bytes=b"5"),
+        ImagePayload(filename="S227094844_568727215.jpg", image_bytes=b"1"),
+        ImagePayload(filename="S227303151_569242989.jpg", image_bytes=b"6"),
+        ImagePayload(filename="S227094844_568727217.jpg", image_bytes=b"3"),
+        ImagePayload(filename="S227094844_568727216.jpg", image_bytes=b"2"),
+        ImagePayload(filename="S227303151_569242990.jpg", image_bytes=b"7"),
+    ]
+
+    clusters, errors = app.identify_product_groups(payloads, _NoEvidencePipeline(), consider_filename_prefixes=True)
+
+    assert errors == []
+    assert [cluster.group_id for cluster in clusters] == ["S227094844", "S227303151"]
+    assert clusters[0].filenames == [
+        "S227094844_568727215.jpg",
+        "S227094844_568727216.jpg",
+        "S227094844_568727217.jpg",
+        "S227094844_568727218.jpg",
+    ]
+    assert status_factory.instances[0].label == "Grouped by filename prefix"
+
+
+def test_identify_product_groups_ignores_prefixes_when_toggle_disabled(monkeypatch):
+    status_factory = _DummyStatusFactory()
+    monkeypatch.setattr(app.st, "status", status_factory)
+    monkeypatch.setattr(app, "prefix_group_clusters", lambda payloads: (_ for _ in ()).throw(AssertionError("should not be called")))
+
+    payload = ImagePayload(filename="S227094844_568727215.jpg", image_bytes=b"1")
+    evidence = [ImageEvidence(payload_id=payload.payload_id, filename=payload.filename, image_hash="h1", brand="SIYA")]
+    pipeline = _GroupingPipelineStub(evidence)
+    expected = [
+        ProductImageCluster(
+            group_id="auto-001",
+            images=[payload],
+            evidence=evidence,
+            confidence=0.5,
+            reason="test",
+            needs_review=True,
+        )
+    ]
+    monkeypatch.setattr(app, "infer_product_groups", lambda payloads, evidence_by_payload_id: expected)
+
+    clusters, errors = app.identify_product_groups([payload], pipeline, consider_filename_prefixes=False)
+
+    assert errors == []
+    assert pipeline.called is True
+    assert clusters == expected
+    assert status_factory.instances[0].label == "Grouped by image evidence"
+
+
+def test_identify_product_groups_falls_back_to_evidence_when_prefixes_are_not_usable(monkeypatch):
+    status_factory = _DummyStatusFactory()
+    monkeypatch.setattr(app.st, "status", status_factory)
+
+    first = ImagePayload(filename="front.jpg", image_bytes=b"1")
+    second = ImagePayload(filename="back.jpg", image_bytes=b"2")
+    evidence = [
+        ImageEvidence(payload_id=first.payload_id, filename=first.filename, image_hash="h1", brand="BAMA"),
+        ImageEvidence(payload_id=second.payload_id, filename=second.filename, image_hash="h2", brand="BAMA"),
+    ]
+    pipeline = _GroupingPipelineStub(evidence)
+    expected = [
+        ProductImageCluster(
+            group_id="auto-001",
+            images=[first, second],
+            evidence=evidence,
+            confidence=0.9,
+            reason="matching product evidence",
+            needs_review=False,
+        )
+    ]
+    monkeypatch.setattr(app, "infer_product_groups", lambda payloads, evidence_by_payload_id: expected)
+
+    clusters, errors = app.identify_product_groups([first, second], pipeline, consider_filename_prefixes=True)
+
+    assert errors == []
+    assert pipeline.called is True
+    assert clusters == expected
+    assert status_factory.instances[0].label == "Grouped by image evidence"
+
+
+def test_identify_product_groups_single_image_still_returns_candidate_group(monkeypatch):
+    payload = ImagePayload(filename="single.jpg", image_bytes=b"1")
+    evidence = [ImageEvidence(payload_id=payload.payload_id, filename=payload.filename, image_hash="h1", brand="ONE")]
+    pipeline = _GroupingPipelineStub(evidence)
+    expected = [
+        ProductImageCluster(
+            group_id="review-001",
+            images=[payload],
+            evidence=evidence,
+            confidence=0.5,
+            reason="insufficient matching evidence; kept separate",
+            needs_review=True,
+        )
+    ]
+    monkeypatch.setattr(app.st, "status", _DummyStatusFactory())
+    monkeypatch.setattr(app, "infer_product_groups", lambda payloads, evidence_by_payload_id: expected)
+
+    clusters, errors = app.identify_product_groups([payload], pipeline, consider_filename_prefixes=True)
+
+    assert errors == []
+    assert pipeline.called is True
+    assert clusters == expected
+
+
+def test_next_manual_group_id_skips_existing_ids():
+    clusters = [
+        ProductImageCluster(group_id="auto-merged-001", images=[]),
+        ProductImageCluster(group_id="auto-merged-002", images=[]),
+        ProductImageCluster(group_id="review-split-001", images=[]),
+    ]
+
+    assert app._next_manual_group_id(clusters, "auto-merged") == "auto-merged-003"
+    assert app._next_manual_group_id(clusters, "review-split") == "review-split-002"
 
 
 class _DummyContainer:

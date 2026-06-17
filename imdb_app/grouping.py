@@ -138,9 +138,18 @@ def _pair_score(left: ImageEvidence, right: ImageEvidence) -> tuple[float, list[
             return 1.0, ["same valid barcode"]
         return 0.0, ["conflicting valid barcodes"]
 
+    left_name = _norm(left.item_name)
+    right_name = _norm(right.item_name)
+    left_brand = _norm(left.brand)
+    right_brand = _norm(right.brand)
+    if left_name and left_name == right_name:
+        if left_brand and left_brand == right_brand:
+            return 1.0, ["same item name", "matching brand"]
+        return 0.8, ["same item name"]
+
     score = 0.0
     reasons: list[str] = []
-    if _norm(left.brand) and _norm(left.brand) == _norm(right.brand):
+    if left_brand and left_brand == right_brand:
         score += 0.35
         reasons.append("matching brand")
     if _norm(left.weight) and _norm(left.weight) == _norm(right.weight):

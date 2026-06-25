@@ -217,6 +217,47 @@ async def test_cohere_client_retries_transient_502_then_succeeds(monkeypatch):
 
     assert calls["count"] == 2
     assert record.item_name.value == "RECOVERED ITEM"
+    assert record.metadata["model_usage"]["model_key"] == "cohere-command-a-vision-07-2025"
+    assert record.metadata["model_usage"]["cost_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_openai_client_attaches_usage_metadata(monkeypatch):
+    client = OpenAIVLMClient(api_key="test", api_url="https://api.openai.com/v1/responses")
+    payload = {name: {"value": None, "confidence": 0.0, "source": "test", "notes": None} for name in IMDB_ATTRIBUTES}
+    payload["item_name"]["value"] = "USAGE TRACKED ITEM"
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+            return httpx.Response(
+                200,
+                json={
+                    "id": "openai-id",
+                    "output": [{"content": [{"type": "output_text", "text": json.dumps(payload)}]}],
+                    "usage": {"input_tokens": 123, "output_tokens": 45, "total_tokens": 168},
+                },
+                request=request,
+            )
+
+    monkeypatch.setattr(vlm_client.httpx, "AsyncClient", FakeAsyncClient)
+
+    record = await client.extract_group(images=[("S1_1.jpg", b"image")], group_id="S1")
+
+    assert record.item_name.value == "USAGE TRACKED ITEM"
+    assert record.metadata["model_usage"]["model_key"] == "openai-gpt-4o-mini"
+    assert record.metadata["model_usage"]["usage"]["input_tokens"] == 123
+    assert record.metadata["model_usage"]["usage"]["output_tokens"] == 45
+    assert record.metadata["model_usage"]["image_count"] == 1
 
 
 @pytest.mark.asyncio

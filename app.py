@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from imdb_app import EXPORT_COLUMNS, IMDB_ATTRIBUTES, ProductRecord, settings
+from imdb_app.costing import format_cost_usd, summarize_model_usage
 from imdb_app.evaluator import GROUND_TRUTH_PATH, evaluate_aligned_records, evaluate_records
 from imdb_app.exporter import Exporter
 from imdb_app.grouping import (
@@ -690,6 +691,7 @@ def render_scorecard(records: list[ProductRecord], enable_hackathon_benchmark: b
     metrics[2].metric("Needs review", count_review_issues(records))
     metrics[3].metric("Columns", len(EXPORT_COLUMNS))
     st.dataframe(validation, width="stretch", hide_index=True)
+    render_model_cost_summary(records)
 
     if enable_hackathon_benchmark and GROUND_TRUTH_PATH.exists():
         st.markdown("##### Hackathon workbook comparison")
@@ -703,6 +705,29 @@ def render_scorecard(records: list[ProductRecord], enable_hackathon_benchmark: b
             eval_cols[1].metric("Aligned normalized match", "n/a")
         eval_cols[2].metric("Workbook row-order benchmark", f"{row_order.normalized_accuracy:.0%}")
         st.caption("Ground-truth match is shown only for aligned rows. Row-order benchmark is retained for workbook-order comparisons.")
+
+
+def render_model_cost_summary(records: list[ProductRecord]) -> None:
+    summary = summarize_model_usage(records)
+    if summary["request_count"] == 0:
+        st.caption("Model usage and cost will appear after extraction.")
+        return
+
+    st.markdown("##### Model usage and cost")
+    cost_cols = st.columns(4)
+    cost_cols[0].metric("Model requests", summary["request_count"])
+    cost_cols[1].metric("Images analyzed", summary["image_count"])
+    cost_cols[2].metric("Tokens", summary["total_tokens"])
+    cost_cols[3].metric("Cost", format_cost_usd(summary["total_cost_usd"]) if summary["known_cost_count"] else "Pricing unavailable")
+
+    models = ", ".join(summary["models"]) or "Unknown model"
+    if summary["cost_available"]:
+        st.caption(f"Models: {models}. Cost is based on provider usage and configured pricing.")
+    elif summary["partial_cost_available"]:
+        st.caption(f"Models: {models}. Some records have pricing unavailable.")
+    else:
+        notes = " ".join(summary["pricing_notes"]) or "Pricing unavailable for the selected model."
+        st.caption(f"Models: {models}. {notes}")
 
 
 def render_export_controls(records: list[ProductRecord], exporter: Exporter) -> None:

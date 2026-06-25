@@ -225,6 +225,47 @@ def test_render_scorecard_renders_benchmark_when_enabled(monkeypatch):
     assert any("Ground-truth match is shown only for aligned rows" in caption for caption in captions)
 
 
+def test_render_model_cost_summary_shows_usage_and_unknown_pricing(monkeypatch):
+    captions: list[str] = []
+    markdowns: list[str] = []
+    metric_sets: list[_DummyMetric] = []
+
+    def fake_columns(count: int):
+        columns = [_DummyMetric() for _ in range(count)]
+        metric_sets.extend(columns)
+        return columns
+
+    monkeypatch.setattr(app.st, "columns", fake_columns)
+    monkeypatch.setattr(app.st, "caption", lambda message: captions.append(message))
+    monkeypatch.setattr(app.st, "markdown", lambda message, **_kwargs: markdowns.append(message))
+
+    record = ProductRecord(
+        id="one",
+        metadata={
+            "model_usage": {
+                "request_count": 1,
+                "image_count": 2,
+                "model_id": "command-a-vision-07-2025",
+                "usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+                "cost_usd": None,
+                "cost_available": False,
+                "cost_is_estimated": True,
+                "pricing": {"note": "Pricing unavailable for this model."},
+            }
+        },
+    )
+
+    app.render_model_cost_summary([record])
+
+    labels = [label for metric in metric_sets for label, *_ in metric.calls]
+    values = [value for metric in metric_sets for _, value, *_ in metric.calls]
+    assert "##### Model usage and cost" in markdowns
+    assert "Model requests" in labels
+    assert "Tokens" in labels
+    assert "Pricing unavailable" in values
+    assert any("Pricing unavailable for this model." in caption for caption in captions)
+
+
 def test_visible_model_profiles_only_show_usable_entries(monkeypatch):
     monkeypatch.setattr(app.settings, "cohere_api_key", "cohere-key")
     monkeypatch.setattr(app.settings, "hf_token", "hf-key")

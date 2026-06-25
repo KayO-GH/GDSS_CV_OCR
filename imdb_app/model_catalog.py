@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from .config import settings
+from .costing import ModelPricing
 
 
 BackendKind = Literal["cohere_direct", "openai_direct", "hf_router"]
@@ -22,6 +23,7 @@ class ModelProfile:
     model_id: str
     credential_kind: CredentialKind
     visible_when_unconfigured: bool = False
+    pricing: ModelPricing = field(default_factory=ModelPricing)
 
     @property
     def provider_label(self) -> str:
@@ -43,6 +45,10 @@ class ModelProfile:
     def status_text(self) -> str:
         return "key detected" if self.is_available else "missing key"
 
+    @property
+    def pricing_status_text(self) -> str:
+        return "pricing available" if self.pricing.is_known else "pricing unavailable"
+
 
 SUPPORTED_MODELS: tuple[ModelProfile, ...] = (
     ModelProfile(
@@ -52,6 +58,11 @@ SUPPORTED_MODELS: tuple[ModelProfile, ...] = (
         model_id="command-a-vision-07-2025",
         credential_kind="cohere_api_key",
         visible_when_unconfigured=True,
+        pricing=ModelPricing(
+            source_label="Cohere pricing",
+            source_url="https://cohere.com/pricing",
+            note="Cohere public pricing did not list command-a-vision-07-2025 token rates when checked.",
+        ),
     ),
     ModelProfile(
         key="hf-qwen3-vl-235b-a22b-instruct",
@@ -59,6 +70,11 @@ SUPPORTED_MODELS: tuple[ModelProfile, ...] = (
         backend="hf_router",
         model_id="Qwen/Qwen3-VL-235B-A22B-Instruct",
         credential_kind="hf_token",
+        pricing=ModelPricing(
+            source_label="Hugging Face Inference Providers pricing",
+            source_url="https://huggingface.co/docs/inference-providers/pricing",
+            note="Hugging Face router costs vary by provider; no stable per-token rate is embedded for this model.",
+        ),
     ),
     ModelProfile(
         key="hf-glm-4-6v-flash",
@@ -66,6 +82,11 @@ SUPPORTED_MODELS: tuple[ModelProfile, ...] = (
         backend="hf_router",
         model_id="zai-org/GLM-4.6V-Flash",
         credential_kind="hf_token",
+        pricing=ModelPricing(
+            source_label="Hugging Face Inference Providers pricing",
+            source_url="https://huggingface.co/docs/inference-providers/pricing",
+            note="Hugging Face router costs vary by provider; no stable per-token rate is embedded for this model.",
+        ),
     ),
     ModelProfile(
         key="openai-gpt-4o-mini",
@@ -73,6 +94,11 @@ SUPPORTED_MODELS: tuple[ModelProfile, ...] = (
         backend="openai_direct",
         model_id="gpt-4o-mini",
         credential_kind="OPENAI_KEY",
+        pricing=ModelPricing(
+            source_label="OpenAI API pricing",
+            source_url="https://openai.com/api/pricing/",
+            note="OpenAI API pricing did not expose a stable text-token rate for gpt-4o-mini when checked.",
+        ),
     ),
 )
 
@@ -100,6 +126,13 @@ def get_model_profile(model_key: str | None) -> ModelProfile:
 
     msg = f"Unsupported model key: {model_key}"
     raise ValueError(msg)
+
+
+def get_model_profile_for_backend_model(backend: BackendKind, model_id: str) -> ModelProfile | None:
+    for profile in SUPPORTED_MODELS:
+        if profile.backend == backend and profile.model_id == model_id:
+            return profile
+    return None
 
 
 def available_model_profiles(*, include_unavailable_visible: bool = False) -> list[ModelProfile]:

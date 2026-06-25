@@ -12,7 +12,8 @@ from typing import Any, Dict, Optional, Protocol
 import httpx
 
 from .config import settings
-from .model_catalog import ModelProfile, get_model_profile
+from .costing import ModelPricing, build_model_usage_metadata
+from .model_catalog import BackendKind, ModelProfile, get_model_profile, get_model_profile_for_backend_model
 from .models import Attribute, IMDB_ATTRIBUTES, ProductRecord
 
 
@@ -144,6 +145,7 @@ def compact_error_detail(detail: str) -> str:
 
 class BaseVLMClient:
     provider = "base"
+    backend_kind: BackendKind | None = None
 
     def __init__(self, *, api_key: Optional[str], api_url: Optional[str], model: str) -> None:
         self.api_key = api_key
@@ -164,7 +166,34 @@ class BaseVLMClient:
             response = await self._post_with_retries(client, headers=headers, payload=payload, group_id=group_id)
             data = response.json()
 
-        return self._parse_response(data, filename=group_id, filenames=[filename for filename, _ in images])
+        record = self._parse_response(data, filename=group_id, filenames=[filename for filename, _ in images])
+        record.metadata["model_usage"] = self._model_usage_metadata(data, image_count=len(images))
+        return record
+
+    def _model_profile(self) -> ModelProfile | None:
+        if self.backend_kind is None:
+            return None
+        return get_model_profile_for_backend_model(self.backend_kind, self.model)
+
+    def _model_usage_metadata(self, response: dict[str, Any], *, image_count: int) -> dict[str, Any]:
+        profile = self._model_profile()
+        if profile is not None:
+            return build_model_usage_metadata(
+                model_key=profile.key,
+                provider_label=profile.provider_label,
+                model_id=profile.model_id,
+                pricing=profile.pricing,
+                response=response,
+                image_count=image_count,
+            )
+        return build_model_usage_metadata(
+            model_key=f"{self.provider}:{self.model}",
+            provider_label=self.provider.title(),
+            model_id=self.model,
+            pricing=ModelPricing(note=f"No pricing metadata configured for {self.provider} model {self.model}."),
+            response=response,
+            image_count=image_count,
+        )
 
     def _build_payload(self, images: list[tuple[str, bytes]], group_id: str | None) -> dict[str, Any]:
         raise NotImplementedError
@@ -237,6 +266,7 @@ class BaseVLMClient:
 
 class OpenAIVLMClient(BaseVLMClient):
     provider = "openai"
+    backend_kind = "openai_direct"
 
     def __init__(self, *, api_key: Optional[str] = None, api_url: Optional[str] = None, model: str | None = None) -> None:
         super().__init__(
@@ -306,6 +336,7 @@ class OpenAIVLMClient(BaseVLMClient):
 
 class CohereVLMClient(BaseVLMClient):
     provider = "cohere"
+    backend_kind = "cohere_direct"
 
     def __init__(self, *, api_key: Optional[str] = None, api_url: Optional[str] = None, model: str | None = None) -> None:
         super().__init__(
@@ -361,6 +392,7 @@ class CohereVLMClient(BaseVLMClient):
 
 class HuggingFaceRouterVLMClient(BaseVLMClient):
     provider = "huggingface"
+    backend_kind = "hf_router"
 
     def __init__(self, *, api_key: Optional[str] = None, api_url: Optional[str] = None, model: str) -> None:
         super().__init__(

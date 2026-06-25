@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Literal
 
 from .config import settings
@@ -58,9 +59,11 @@ SUPPORTED_MODELS: tuple[ModelProfile, ...] = (
         model_id="zai-org/GLM-4.6V-Flash",
         credential_kind="hf_token",
         pricing=ModelPricing(
-            source_label="Hugging Face Inference Providers pricing",
-            source_url="https://huggingface.co/docs/inference-providers/pricing",
-            note="Hugging Face router costs vary by provider; no stable per-token rate is embedded for this model.",
+            input_per_million=Decimal("0.30"),
+            output_per_million=Decimal("0.90"),
+            source_label="Hugging Face Inference Providers supported models",
+            source_url="https://huggingface.co/inference/models",
+            note="Verified on Hugging Face Inference Providers supported models page using Novita pricing for GLM-4.6V-Flash.",
         ),
     ),
     ModelProfile(
@@ -70,9 +73,11 @@ SUPPORTED_MODELS: tuple[ModelProfile, ...] = (
         model_id="Qwen/Qwen3-VL-235B-A22B-Instruct",
         credential_kind="hf_token",
         pricing=ModelPricing(
-            source_label="Hugging Face Inference Providers pricing",
-            source_url="https://huggingface.co/docs/inference-providers/pricing",
-            note="Hugging Face router costs vary by provider; no stable per-token rate is embedded for this model.",
+            input_per_million=Decimal("0.30"),
+            output_per_million=Decimal("1.50"),
+            source_label="Hugging Face Inference Providers supported models",
+            source_url="https://huggingface.co/inference/models",
+            note="Verified on Hugging Face Inference Providers supported models page using Novita pricing for Qwen3-VL-235B-A22B-Instruct.",
         ),
     ),
     ModelProfile(

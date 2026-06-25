@@ -76,9 +76,13 @@ class _RetryPipelineStub:
 class _DummyMetric:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str | None]] = []
+        self.captions: list[str] = []
 
     def metric(self, label: str, value, delta=None) -> None:
         self.calls.append((label, str(value), None if delta is None else str(delta)))
+
+    def caption(self, message: str) -> None:
+        self.captions.append(message)
 
 
 def _clear_batch_state() -> None:
@@ -209,6 +213,27 @@ def test_process_reviewed_clusters_tracks_failed_groups_and_retries_only_failure
     assert batch.status == "processed"
     assert batch.failed_group_ids == []
     assert app.failed_clusters_for_batch(batch.id) == []
+
+
+def test_render_header_shows_provider_and_model_id_separately(monkeypatch):
+    metric_sets: list[_DummyMetric] = []
+
+    def fake_columns(count: int):
+        columns = [_DummyMetric() for _ in range(count)]
+        metric_sets.extend(columns)
+        return columns
+
+    monkeypatch.setattr(app.st, "title", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app.st, "columns", fake_columns)
+
+    profile = get_model_profile("cohere-command-a-vision-07-2025")
+
+    app.render_header([], profile, active_key="test-key")
+
+    model_card = metric_sets[3]
+    assert ("Model", "Cohere", "key detected") in model_card.calls
+    assert model_card.captions == ["command-a-vision-07-2025"]
 
 
 def test_render_workflow_empty_state_does_not_claim_duplicate_found(monkeypatch):

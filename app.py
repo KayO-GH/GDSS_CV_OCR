@@ -26,7 +26,13 @@ from imdb_app.grouping import (
     group_images_by_filename_prefix,
     infer_product_groups,
 )
-from imdb_app.model_catalog import available_model_profiles, get_model_profile, resolve_default_model_key, selected_or_first_available
+from imdb_app.model_catalog import (
+    ModelProfile,
+    available_model_profiles,
+    get_model_profile,
+    resolve_default_model_key,
+    selected_or_first_available,
+)
 from imdb_app.normalizer import normalize_record
 from imdb_app.pack_parser import parse_pack_text
 from imdb_app.pipeline import ExtractionPipeline, get_pipeline
@@ -409,14 +415,15 @@ def recompute_suggestions(store: ProductStore) -> None:
     set_suggestions(store.merge_suggestions([record.to_dict() for record in store.all()]))
 
 
-def render_header(records: list[ProductRecord], model_label: str, active_key: str | None) -> None:
+def render_header(records: list[ProductRecord], model_profile: ModelProfile, active_key: str | None) -> None:
     st.title("IMDB Auto-Fill")
     st.caption("Product photos to reviewed, validated, database-ready item-master rows.")
     cols = st.columns(4)
     cols[0].metric("Rows", len(records))
     cols[1].metric("Required complete", f"{required_completion(records):.0%}" if records else "0%")
     cols[2].metric("Open issues", count_review_issues(records))
-    cols[3].metric("Model", model_label, "key detected" if active_key else "missing key")
+    cols[3].metric("Model", model_profile.provider_label, "key detected" if active_key else "missing key")
+    cols[3].caption(model_profile.model_id)
 
 
 def required_completion(records: list[ProductRecord]) -> float:
@@ -1062,7 +1069,7 @@ def main() -> None:
         key="selected_model_label",
     )
     selected_profile = next(profile for profile in profiles if profile.label == selected_label)
-    pipeline, threshold, consider_filename_prefixes, enable_hackathon_benchmark, active_key, model_label = render_sidebar(
+    pipeline, threshold, consider_filename_prefixes, enable_hackathon_benchmark, active_key, _model_label = render_sidebar(
         selected_profile.key
     )
 
@@ -1085,7 +1092,7 @@ def main() -> None:
         recompute_suggestions(store)
         st.rerun()
 
-    render_header(records, model_label, active_key)
+    render_header(records, selected_profile, active_key)
     render_add_images_step(store, pipeline, consider_filename_prefixes)
     render_workflow(store.all(), threshold, store, exporter, enable_hackathon_benchmark)
 

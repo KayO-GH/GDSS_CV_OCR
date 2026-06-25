@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import app
 from imdb_app.exporter import Exporter
 from imdb_app.grouping import ImageEvidence, ImagePayload, ProductImageCluster
+from imdb_app.model_catalog import get_model_profile
 from imdb_app.models import Attribute, ProductRecord
 from imdb_app.store import ProductStore
 
@@ -380,10 +381,38 @@ def test_visible_model_profiles_only_show_usable_entries(monkeypatch):
     profiles = app.visible_model_profiles()
 
     assert [profile.key for profile in profiles] == [
-        "cohere-command-a-vision-07-2025",
-        "hf-qwen3-vl-235b-a22b-instruct",
         "hf-glm-4-6v-flash",
+        "hf-qwen3-vl-235b-a22b-instruct",
+        "cohere-command-a-vision-07-2025",
     ]
+
+
+def test_default_visible_model_profile_prefers_first_visible_when_no_explicit_default(monkeypatch):
+    monkeypatch.setattr(app.settings, "default_model_key", None)
+
+    profiles = [
+        get_model_profile("hf-glm-4-6v-flash"),
+        get_model_profile("hf-qwen3-vl-235b-a22b-instruct"),
+        get_model_profile("cohere-command-a-vision-07-2025"),
+    ]
+
+    selected = app.default_visible_model_profile(profiles)
+
+    assert selected.key == "hf-glm-4-6v-flash"
+
+
+def test_default_visible_model_profile_respects_explicit_default(monkeypatch):
+    monkeypatch.setattr(app.settings, "default_model_key", "cohere-command-a-vision-07-2025")
+
+    profiles = [
+        get_model_profile("hf-glm-4-6v-flash"),
+        get_model_profile("hf-qwen3-vl-235b-a22b-instruct"),
+        get_model_profile("cohere-command-a-vision-07-2025"),
+    ]
+
+    selected = app.default_visible_model_profile(profiles)
+
+    assert selected.key == "cohere-command-a-vision-07-2025"
 
 
 def test_identify_product_groups_uses_filename_prefixes_when_toggle_enabled(monkeypatch):

@@ -1037,6 +1037,15 @@ def visible_model_profiles() -> list:
     return [selected_or_first_available(resolve_default_model_key())]
 
 
+def default_visible_model_profile(profiles: list):
+    configured_default = (settings.default_model_key or "").strip()
+    if configured_default:
+        selected = selected_or_first_available(configured_default)
+        if any(profile.key == selected.key for profile in profiles):
+            return selected
+    return profiles[0]
+
+
 def main() -> None:
     render_shell_styles()
     store = get_store()
@@ -1044,13 +1053,13 @@ def main() -> None:
 
     profiles = visible_model_profiles()
     profile_labels = [profile.label for profile in profiles]
-    default_profile = selected_or_first_available(resolve_default_model_key())
-    if default_profile.label not in profile_labels:
-        default_profile = profiles[0]
+    default_profile = default_visible_model_profile(profiles)
+    if st.session_state.get("selected_model_label") not in profile_labels:
+        st.session_state["selected_model_label"] = default_profile.label
     selected_label = st.sidebar.selectbox(
         "Extraction model",
         options=profile_labels,
-        index=profile_labels.index(default_profile.label),
+        key="selected_model_label",
     )
     selected_profile = next(profile for profile in profiles if profile.label == selected_label)
     pipeline, threshold, consider_filename_prefixes, enable_hackathon_benchmark, active_key, model_label = render_sidebar(

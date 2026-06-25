@@ -52,16 +52,15 @@ class ModelProfile:
 
 SUPPORTED_MODELS: tuple[ModelProfile, ...] = (
     ModelProfile(
-        key="cohere-command-a-vision-07-2025",
-        label="Cohere command-a-vision-07-2025",
-        backend="cohere_direct",
-        model_id="command-a-vision-07-2025",
-        credential_kind="cohere_api_key",
-        visible_when_unconfigured=True,
+        key="hf-glm-4-6v-flash",
+        label="Hugging Face GLM-4.6V-Flash",
+        backend="hf_router",
+        model_id="zai-org/GLM-4.6V-Flash",
+        credential_kind="hf_token",
         pricing=ModelPricing(
-            source_label="Cohere pricing",
-            source_url="https://cohere.com/pricing",
-            note="Cohere public pricing did not list command-a-vision-07-2025 token rates when checked.",
+            source_label="Hugging Face Inference Providers pricing",
+            source_url="https://huggingface.co/docs/inference-providers/pricing",
+            note="Hugging Face router costs vary by provider; no stable per-token rate is embedded for this model.",
         ),
     ),
     ModelProfile(
@@ -77,15 +76,16 @@ SUPPORTED_MODELS: tuple[ModelProfile, ...] = (
         ),
     ),
     ModelProfile(
-        key="hf-glm-4-6v-flash",
-        label="Hugging Face GLM-4.6V-Flash",
-        backend="hf_router",
-        model_id="zai-org/GLM-4.6V-Flash",
-        credential_kind="hf_token",
+        key="cohere-command-a-vision-07-2025",
+        label="Cohere command-a-vision-07-2025",
+        backend="cohere_direct",
+        model_id="command-a-vision-07-2025",
+        credential_kind="cohere_api_key",
+        visible_when_unconfigured=True,
         pricing=ModelPricing(
-            source_label="Hugging Face Inference Providers pricing",
-            source_url="https://huggingface.co/docs/inference-providers/pricing",
-            note="Hugging Face router costs vary by provider; no stable per-token rate is embedded for this model.",
+            source_label="Cohere pricing",
+            source_url="https://cohere.com/pricing",
+            note="Cohere public pricing did not list command-a-vision-07-2025 token rates when checked.",
         ),
     ),
     ModelProfile(

@@ -23,7 +23,15 @@ from imdb_app.grouping_benchmark import (
 )
 from imdb_app.pipeline import ExtractionPipeline, preprocess
 from imdb_app.validators import validate_barcode
-from imdb_app.vlm_client import CohereVLMClient, HuggingFaceRouterVLMClient, OpenAIVLMClient, build_attribute_schema, get_vlm_client, image_data_url
+from imdb_app.vlm_client import (
+    CohereVLMClient,
+    HuggingFaceRouterVLMClient,
+    OpenAIVLMClient,
+    build_attribute_schema,
+    get_vlm_client,
+    hf_router_response_format,
+    image_data_url,
+)
 
 
 def _report_row(name: str, report: PairwiseGroupingReport) -> dict[str, object]:
@@ -173,8 +181,12 @@ def _build_batch_payload(client: Any, batch: list[tuple[str, bytes]], batch_id: 
                 ]
             )
         response_format: dict[str, Any]
-        if client.model == "zai-org/GLM-4.6V-Flash":
-            response_format = {"type": "json_object"}
+        if isinstance(client, HuggingFaceRouterVLMClient):
+            response_format = hf_router_response_format(
+                client.model,
+                schema_name="grouping_batch_schema",
+                schema=schema,
+            )
         else:
             response_format = {
                 "type": "json_schema",

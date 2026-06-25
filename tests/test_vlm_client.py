@@ -126,6 +126,33 @@ def test_hf_router_payload_uses_openai_compatible_chat_schema():
     assert any(item["type"] == "image_url" for item in payload["messages"][1]["content"])
 
 
+@pytest.mark.parametrize("model", ["zai-org/GLM-4.6V-Flash", "zai-org/glm-4.6v"])
+def test_hf_router_glm_payload_uses_json_object_response_format(model: str):
+    client = HuggingFaceRouterVLMClient(
+        api_key="test",
+        api_url="https://router.huggingface.co/v1/chat/completions",
+        model=model,
+    )
+
+    payload = client._build_payload(images=[("S1_1.jpg", b"image")], group_id="S1")
+
+    assert payload["response_format"] == {"type": "json_object"}
+
+
+def test_hf_router_glm_grouping_payload_uses_json_object_response_format():
+    from scripts.benchmark_grouping_models import _build_batch_payload
+
+    client = HuggingFaceRouterVLMClient(
+        api_key="test",
+        api_url="https://router.huggingface.co/v1/chat/completions",
+        model="zai-org/glm-4.6v",
+    )
+
+    payload = _build_batch_payload(client, [("S227303151_569242990.jpg", b"image")], "batch-001")
+
+    assert payload["response_format"] == {"type": "json_object"}
+
+
 def test_hf_router_response_parses_chat_completion_message():
     client = HuggingFaceRouterVLMClient(
         api_key="test",

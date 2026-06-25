@@ -70,6 +70,7 @@ class ProviderConfigurationError(RuntimeError):
 
 
 TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+HF_ROUTER_JSON_OBJECT_ONLY_MODEL_MARKERS = ("glm-4.6v", "glm-4-6v")
 
 
 def build_attribute_schema(*, include_numeric_bounds: bool = True) -> dict[str, Any]:
@@ -103,6 +104,24 @@ def build_imdb_schema(*, include_numeric_bounds: bool = True) -> dict[str, Any]:
 def image_data_url(image_bytes: bytes, mime_type: str = "image/jpeg") -> str:
     encoded = base64.b64encode(image_bytes).decode("utf-8")
     return f"data:{mime_type};base64,{encoded}"
+
+
+def hf_router_supports_json_schema_response_format(model: str) -> bool:
+    normalized_model = model.lower()
+    return not any(marker in normalized_model for marker in HF_ROUTER_JSON_OBJECT_ONLY_MODEL_MARKERS)
+
+
+def hf_router_response_format(model: str, *, schema_name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    if not hf_router_supports_json_schema_response_format(model):
+        return {"type": "json_object"}
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema_name,
+            "schema": schema,
+            "strict": True,
+        },
+    }
 
 
 def normalize_imdb_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -420,14 +439,11 @@ class HuggingFaceRouterVLMClient(BaseVLMClient):
                 {"role": "system", "content": PROMPT_TEMPLATE},
                 {"role": "user", "content": user_content},
             ],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "imdb_schema",
-                    "schema": build_imdb_schema(),
-                    "strict": True,
-                },
-            },
+            "response_format": hf_router_response_format(
+                self.model,
+                schema_name="imdb_schema",
+                schema=build_imdb_schema(),
+            ),
         }
 
     def _parse_response(self, response: Dict[str, Any], filename: str | None, filenames: list[str] | None = None) -> ProductRecord:

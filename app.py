@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import datetime as dt
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, TYPE_CHECKING
 
@@ -50,6 +52,26 @@ REQUIRED_ATTRIBUTES = [
 MERCHANDISING_ATTRIBUTES = ["variant", "fragrance_flavor", "promotion", "addons", "tagline"]
 
 
+@dataclass
+class BatchRun:
+    id: str
+    uploaded_filenames: list[str]
+    image_count: int
+    inferred_groups: list[str] = field(default_factory=list)
+    reviewed_groups: list[str] = field(default_factory=list)
+    processed_group_ids: list[str] = field(default_factory=list)
+    failed_group_ids: list[str] = field(default_factory=list)
+    record_ids: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    status: str = "identified"
+    created_at: str = field(default_factory=lambda: dt.datetime.now(dt.UTC).isoformat(timespec="seconds"))
+    updated_at: str = field(default_factory=lambda: dt.datetime.now(dt.UTC).isoformat(timespec="seconds"))
+
+    @property
+    def group_count(self) -> int:
+        return len(self.reviewed_groups or self.inferred_groups)
+
+
 def get_store() -> ProductStore:
     if "store" not in st.session_state:
         st.session_state.store = ProductStore()
@@ -87,6 +109,89 @@ def upload_payload_cache() -> list[ImagePayload]:
 
 def inferred_cluster_cache() -> list[ProductImageCluster]:
     return st.session_state.setdefault("inferred_image_clusters", [])
+
+
+def batch_history() -> list[BatchRun]:
+    return st.session_state.setdefault("batch_runs", [])
+
+
+def failed_cluster_cache() -> dict[str, list[ProductImageCluster]]:
+    return st.session_state.setdefault("batch_failed_clusters_by_id", {})
+
+
+def current_batch_id() -> str | None:
+    return st.session_state.get("current_batch_id")
+
+
+def _touch_batch(batch: BatchRun) -> None:
+    batch.updated_at = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
+
+
+def _next_batch_id() -> str:
+    return f"batch-{len(batch_history()) + 1:03d}"
+
+
+def find_batch(batch_id: str | None) -> BatchRun | None:
+    if not batch_id:
+        return None
+    return next((batch for batch in batch_history() if batch.id == batch_id), None)
+
+
+def create_batch_run(payloads: list[ImagePayload], clusters: list[ProductImageCluster]) -> BatchRun:
+    batch = BatchRun(
+        id=_next_batch_id(),
+        uploaded_filenames=[payload.filename for payload in payloads],
+        image_count=len(payloads),
+        inferred_groups=[cluster.group_id for cluster in clusters],
+    )
+    batch_history().append(batch)
+    st.session_state.current_batch_id = batch.id
+    failed_cluster_cache().pop(batch.id, None)
+    return batch
+
+
+def update_batch_review(batch_id: str | None, clusters: list[ProductImageCluster]) -> None:
+    batch = find_batch(batch_id)
+    if batch is None:
+        return
+    batch.reviewed_groups = [cluster.group_id for cluster in clusters]
+    batch.status = "reviewed"
+    _touch_batch(batch)
+
+
+def record_batch_results(
+    batch_id: str | None,
+    clusters: list[ProductImageCluster],
+    processed: list[ProductRecord],
+    errors: list[str],
+) -> None:
+    batch = find_batch(batch_id)
+    if batch is None:
+        return
+
+    processed_group_ids = {record.filename or record.id for record in processed}
+    failed_group_ids = {error.split(":", 1)[0] for error in errors}
+    batch.reviewed_groups = [cluster.group_id for cluster in clusters]
+    batch.processed_group_ids = sorted(set(batch.processed_group_ids) | processed_group_ids)
+    batch.failed_group_ids = sorted(failed_group_ids)
+    batch.record_ids = sorted(set(batch.record_ids) | {record.id for record in processed})
+    batch.errors = errors
+    if failed_group_ids and processed_group_ids:
+        batch.status = "partial"
+    elif failed_group_ids:
+        batch.status = "failed"
+    else:
+        batch.status = "processed"
+    failed_cluster_cache()[batch.id] = [cluster for cluster in clusters if cluster.group_id in failed_group_ids]
+    if not failed_group_ids:
+        failed_cluster_cache().pop(batch.id, None)
+    _touch_batch(batch)
+
+
+def failed_clusters_for_batch(batch_id: str | None) -> list[ProductImageCluster]:
+    if not batch_id:
+        return []
+    return failed_cluster_cache().get(batch_id, [])
 
 
 def remember_payloads(payloads: Iterable[ImagePayload]) -> list:
@@ -143,10 +248,18 @@ def process_image_payloads(payloads: Iterable[ImagePayload], pipeline: Extractio
     return processed, errors
 
 
-def process_reviewed_clusters(clusters: Iterable[ProductImageCluster], pipeline: ExtractionPipeline, store: ProductStore) -> tuple[list[ProductRecord], list[str]]:
+def process_reviewed_clusters(
+    clusters: Iterable[ProductImageCluster],
+    pipeline: ExtractionPipeline,
+    store: ProductStore,
+    *,
+    batch_id: str | None = None,
+) -> tuple[list[ProductRecord], list[str]]:
     processed: list[ProductRecord] = []
     errors: list[str] = []
-    groups = remember_clusters(clusters)
+    cluster_list = list(clusters)
+    update_batch_review(batch_id, cluster_list)
+    groups = remember_clusters(cluster_list)
 
     status = st.status("Extracting reviewed product groups", expanded=True)
     status.write(f"Queued {len(groups)} reviewed product group(s)")
@@ -157,11 +270,14 @@ def process_reviewed_clusters(clusters: Iterable[ProductImageCluster], pipeline:
             errors.append(f"{group.group_id}: {error}")
             status.write(f"Failed {group.group_id}")
         elif record is not None:
+            if batch_id:
+                record.metadata["batch_id"] = batch_id
             store.upsert(record)
             processed.append(record)
             status.write(f"Extracted {group.group_id} from {len(group.images)} image(s)")
     status.write("Checking duplicates")
     status.update(label="Ready for field review", state="complete")
+    record_batch_results(batch_id, cluster_list, processed, errors)
 
     return processed, errors
 
@@ -212,6 +328,7 @@ def identify_product_groups(
         clusters = prefix_group_clusters(payloads)
         if clusters:
             st.session_state.inferred_image_clusters = clusters
+            create_batch_run(payloads, clusters)
             status.write("Grouped by filename prefix")
             status.write(f"Created {len(clusters)} candidate product group(s)")
             status.update(label="Grouped by filename prefix", state="complete")
@@ -227,6 +344,7 @@ def identify_product_groups(
     evidence_by_payload_id = {item.payload_id: item for item in evidence}
     clusters = infer_product_groups(payloads, evidence_by_payload_id)
     st.session_state.inferred_image_clusters = clusters
+    create_batch_run(payloads, clusters)
     status.write("Grouped by image evidence")
     status.write(f"Created {len(clusters)} candidate product group(s)")
     status.update(label="Grouped by image evidence", state="complete")
@@ -730,6 +848,37 @@ def render_model_cost_summary(records: list[ProductRecord]) -> None:
         st.caption(f"Models: {models}. {notes}")
 
 
+def batch_history_frame() -> pd.DataFrame:
+    rows = []
+    for batch in batch_history():
+        rows.append(
+            {
+                "Batch": batch.id,
+                "Status": batch.status,
+                "Images": batch.image_count,
+                "Groups": batch.group_count,
+                "Processed groups": len(batch.processed_group_ids),
+                "Failed groups": len(batch.failed_group_ids),
+                "Records": len(batch.record_ids),
+                "Updated": batch.updated_at,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def render_batch_history() -> None:
+    history = batch_history()
+    if not history:
+        st.caption("Batch runs will appear after product-group identification.")
+        return
+
+    st.markdown("##### Batch runs")
+    st.dataframe(batch_history_frame(), width="stretch", hide_index=True)
+    active = find_batch(current_batch_id())
+    if active is not None and active.errors:
+        st.warning("\n".join(f"- {item}" for item in active.errors))
+
+
 def render_export_controls(records: list[ProductRecord], exporter: Exporter) -> None:
     if not records:
         st.caption("Validated rows will appear here after extraction.")
@@ -801,11 +950,23 @@ def render_add_images_step(store: ProductStore, pipeline: ExtractionPipeline, co
 
         clusters = inferred_cluster_cache()
         if clusters:
+            active_batch = find_batch(current_batch_id())
+            if active_batch is not None:
+                st.caption(f"Current batch: {active_batch.id} | {active_batch.status}")
             reviewed_clusters = render_group_review(clusters)
             if st.button("Run extraction for reviewed groups", type="primary", width="stretch"):
-                processed, errors = process_reviewed_clusters(reviewed_clusters, pipeline, store)
+                processed, errors = process_reviewed_clusters(reviewed_clusters, pipeline, store, batch_id=current_batch_id())
                 if processed:
                     st.success(f"Processed {len(processed)} reviewed product group(s).")
+                if errors:
+                    st.error("\n".join(f"- {item}" for item in errors))
+                recompute_suggestions(store)
+                st.rerun()
+            retry_clusters = failed_clusters_for_batch(current_batch_id())
+            if retry_clusters and st.button("Retry failed groups", width="stretch"):
+                processed, errors = process_reviewed_clusters(retry_clusters, pipeline, store, batch_id=current_batch_id())
+                if processed:
+                    st.success(f"Retried {len(processed)} failed product group(s).")
                 if errors:
                     st.error("\n".join(f"- {item}" for item in errors))
                 recompute_suggestions(store)
@@ -825,6 +986,7 @@ def render_workflow(
             st.success(f"{len(records)} row(s) ready for review.")
         else:
             st.info("Upload product photos to start extraction.")
+        render_batch_history()
 
     st.markdown("### 3. Review Fields")
     with st.container(border=True):
@@ -904,6 +1066,9 @@ def main() -> None:
         st.session_state.pop("grouping_evidence_by_hash", None)
         st.session_state.pop("uploaded_image_payloads", None)
         st.session_state.pop("inferred_image_clusters", None)
+        st.session_state.pop("batch_runs", None)
+        st.session_state.pop("current_batch_id", None)
+        st.session_state.pop("batch_failed_clusters_by_id", None)
         st.rerun()
 
     records = store.all()

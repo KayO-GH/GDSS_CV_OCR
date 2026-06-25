@@ -56,12 +56,39 @@ class _GroupingPipelineStub:
         return self.evidence
 
 
+class _RetryPipelineStub:
+    def __init__(self) -> None:
+        self.calls: dict[str, int] = {}
+
+    async def process_group(self, group) -> ProductRecord:
+        self.calls[group.group_id] = self.calls.get(group.group_id, 0) + 1
+        if group.group_id == "bad" and self.calls[group.group_id] == 1:
+            raise RuntimeError("temporary failure")
+        return ProductRecord(
+            id=f"{group.group_id}-record",
+            filename=group.group_id,
+            filenames=[image.filename for image in group.images],
+            item_name=Attribute(value=group.group_id, confidence=1.0, source="stub"),
+        )
+
+
 class _DummyMetric:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str | None]] = []
 
     def metric(self, label: str, value, delta=None) -> None:
         self.calls.append((label, str(value), None if delta is None else str(delta)))
+
+
+def _clear_batch_state() -> None:
+    for key in [
+        "batch_runs",
+        "current_batch_id",
+        "batch_failed_clusters_by_id",
+        "inferred_image_clusters",
+        "uploaded_image_payloads",
+    ]:
+        app.st.session_state.pop(key, None)
 
 
 def test_process_image_payloads_processes_all_groups(monkeypatch):
@@ -105,7 +132,86 @@ def test_process_reviewed_clusters_uses_reviewed_group_ids(monkeypatch):
     assert status_factory.instances[0].updated is True
 
 
+def test_identify_product_groups_records_batch_history(monkeypatch):
+    _clear_batch_state()
+    status_factory = _DummyStatusFactory()
+    monkeypatch.setattr(app.st, "status", status_factory)
+
+    class _NoEvidencePipeline:
+        async def analyze_images_for_grouping(self, payloads, cache=None):
+            raise AssertionError("evidence grouping should not run when usable prefixes exist")
+
+    payloads = [
+        ImagePayload(filename="S1_1.jpg", image_bytes=b"1"),
+        ImagePayload(filename="S1_2.jpg", image_bytes=b"2"),
+        ImagePayload(filename="S2_1.jpg", image_bytes=b"3"),
+        ImagePayload(filename="S2_2.jpg", image_bytes=b"4"),
+    ]
+
+    clusters, errors = app.identify_product_groups(payloads, _NoEvidencePipeline(), consider_filename_prefixes=True)
+
+    assert errors == []
+    assert [cluster.group_id for cluster in clusters] == ["S1", "S2"]
+    assert app.current_batch_id() == "batch-001"
+    assert len(app.batch_history()) == 1
+    batch = app.batch_history()[0]
+    assert batch.uploaded_filenames == ["S1_1.jpg", "S1_2.jpg", "S2_1.jpg", "S2_2.jpg"]
+    assert batch.image_count == 4
+    assert batch.inferred_groups == ["S1", "S2"]
+    assert batch.status == "identified"
+
+
+def test_create_batch_run_keeps_multiple_batches_isolated():
+    _clear_batch_state()
+    first_payload = [ImagePayload(filename="A_1.jpg", image_bytes=b"1")]
+    second_payload = [ImagePayload(filename="B_1.jpg", image_bytes=b"2")]
+
+    first = app.create_batch_run(first_payload, [ProductImageCluster(group_id="A", images=first_payload)])
+    second = app.create_batch_run(second_payload, [ProductImageCluster(group_id="B", images=second_payload)])
+
+    assert first.id == "batch-001"
+    assert second.id == "batch-002"
+    assert app.current_batch_id() == "batch-002"
+    assert first.uploaded_filenames == ["A_1.jpg"]
+    assert second.uploaded_filenames == ["B_1.jpg"]
+
+
+def test_process_reviewed_clusters_tracks_failed_groups_and_retries_only_failures(monkeypatch):
+    _clear_batch_state()
+    status_factory = _DummyStatusFactory()
+    monkeypatch.setattr(app.st, "status", status_factory)
+    monkeypatch.setattr(app.settings, "group_processing_concurrency", 1)
+    store = ProductStore()
+    pipeline = _RetryPipelineStub()
+    good_payload = ImagePayload(filename="good.jpg", image_bytes=b"1")
+    bad_payload = ImagePayload(filename="bad.jpg", image_bytes=b"2")
+    clusters = [
+        ProductImageCluster(group_id="good", images=[good_payload]),
+        ProductImageCluster(group_id="bad", images=[bad_payload]),
+    ]
+    batch = app.create_batch_run([good_payload, bad_payload], clusters)
+
+    processed, errors = app.process_reviewed_clusters(clusters, pipeline, store, batch_id=batch.id)
+
+    assert [record.id for record in processed] == ["good-record"]
+    assert errors == ["bad: temporary failure"]
+    assert batch.status == "partial"
+    assert batch.processed_group_ids == ["good"]
+    assert batch.failed_group_ids == ["bad"]
+    assert [cluster.group_id for cluster in app.failed_clusters_for_batch(batch.id)] == ["bad"]
+
+    retry_processed, retry_errors = app.process_reviewed_clusters(app.failed_clusters_for_batch(batch.id), pipeline, store, batch_id=batch.id)
+
+    assert retry_errors == []
+    assert [record.id for record in retry_processed] == ["bad-record"]
+    assert pipeline.calls == {"good": 1, "bad": 2}
+    assert batch.status == "processed"
+    assert batch.failed_group_ids == []
+    assert app.failed_clusters_for_batch(batch.id) == []
+
+
 def test_render_workflow_empty_state_does_not_claim_duplicate_found(monkeypatch):
+    _clear_batch_state()
     captions: list[str] = []
     successes: list[str] = []
 

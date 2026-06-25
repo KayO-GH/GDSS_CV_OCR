@@ -5,6 +5,7 @@ import pytest
 from imdb_app.models import Attribute, ProductRecord
 import imdb_app.pipeline as pipeline_module
 from imdb_app.pipeline import ExtractionPipeline
+from imdb_app.barcode import BarcodeScanCandidate
 from imdb_app.grouping import ImageGroup, ImagePayload
 from imdb_app.vlm_client import ProviderConfigurationError
 
@@ -133,6 +134,59 @@ async def test_pipeline_surfaces_barcode_conflicts(monkeypatch, sample_image_byt
     assert record.barcode.source == "barcode_scan"
     assert record.metadata["barcode_conflict"]["model"] == "8410300363439"
     assert record.metadata["barcode_conflict"]["scanner"] == "8901035064345"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_process_group_uses_best_valid_barcode_candidate(monkeypatch, sample_image_bytes: bytes):
+    def fake_scan(image_bytes: bytes):
+        if image_bytes.endswith(b"second"):
+            return [BarcodeScanCandidate.from_value("6034000482027", quality=10)]
+        return [BarcodeScanCandidate.from_value("6034000482028", quality=100)]
+
+    monkeypatch.setattr(pipeline_module, "preprocess", lambda image_bytes: image_bytes)
+    monkeypatch.setattr(pipeline_module, "scan_barcodes", fake_scan)
+    monkeypatch.setattr(pipeline_module, "extract_barcode", lambda _image_bytes: None)
+    pipeline = ExtractionPipeline(client=StubClient())
+    group = ImageGroup(
+        group_id="S123",
+        images=[
+            ImagePayload(filename="S123_1.jpg", image_bytes=sample_image_bytes),
+            ImagePayload(filename="S123_2.jpg", image_bytes=sample_image_bytes + b"second"),
+        ],
+    )
+
+    record = await pipeline.process_group(group)
+
+    assert record.barcode.value == "6034000482027"
+    assert record.metadata["selected_barcode_candidate"]["source_image"] == "S123_2.jpg"
+    assert len(record.metadata["barcode_candidates"]) == 2
+    assert [candidate["selected"] for candidate in record.metadata["barcode_candidates"]] == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_records_conflicting_valid_group_candidates(monkeypatch, sample_image_bytes: bytes):
+    def fake_scan(image_bytes: bytes):
+        if image_bytes.endswith(b"second"):
+            return [BarcodeScanCandidate.from_value("8410300363439", quality=90)]
+        return [BarcodeScanCandidate.from_value("6034000482027", quality=10)]
+
+    monkeypatch.setattr(pipeline_module, "preprocess", lambda image_bytes: image_bytes)
+    monkeypatch.setattr(pipeline_module, "scan_barcodes", fake_scan)
+    monkeypatch.setattr(pipeline_module, "extract_barcode", lambda _image_bytes: None)
+    pipeline = ExtractionPipeline(client=StubClient())
+    group = ImageGroup(
+        group_id="S123",
+        images=[
+            ImagePayload(filename="S123_1.jpg", image_bytes=sample_image_bytes),
+            ImagePayload(filename="S123_2.jpg", image_bytes=sample_image_bytes + b"second"),
+        ],
+    )
+
+    record = await pipeline.process_group(group)
+
+    assert record.barcode.value == "8410300363439"
+    assert {candidate["value"] for candidate in record.metadata["barcode_candidates"]} == {"6034000482027", "8410300363439"}
+    assert record.metadata["selected_barcode_candidate"]["source_image"] == "S123_2.jpg"
 
 
 @pytest.mark.asyncio

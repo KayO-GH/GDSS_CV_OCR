@@ -18,7 +18,7 @@ from .models import ProductRecord
 from .normalizer import normalize_record
 from .validators import validate_barcode
 from .vlm_client import SupportsVLMExtraction, get_vlm_client, normalize_provider
-from .barcode import extract_barcode
+from .barcode import BarcodeScanCandidate, choose_barcode_candidate, extract_barcode, scan_barcodes
 from .config import settings
 from .exporter import Exporter
 from .grouping import ImageEvidence, ImageGroup, ImagePayload, hash_image_bytes
@@ -45,13 +45,58 @@ class ExtractionPipeline:
         self.exporter = exporter or Exporter()
 
     @staticmethod
-    def _apply_barcode_scan(record: ProductRecord, barcode_value: str | None) -> None:
-        if not barcode_value:
+    def _scan_barcode_candidates(image_bytes: bytes) -> list[BarcodeScanCandidate]:
+        candidates = scan_barcodes(image_bytes)
+        if candidates:
+            return candidates
+        legacy_value = extract_barcode(image_bytes)
+        if not legacy_value:
+            return []
+        return [BarcodeScanCandidate.from_value(legacy_value)]
+
+    @staticmethod
+    def _barcode_candidate_metadata(
+        candidates_by_image: Sequence[tuple[str | None, Sequence[BarcodeScanCandidate]]],
+        selected: BarcodeScanCandidate | None,
+    ) -> list[dict[str, object | None]]:
+        selected_key = (selected.normalized_value or selected.value) if selected else None
+        rows: list[dict[str, object | None]] = []
+        for source_image, candidates in candidates_by_image:
+            for candidate in candidates:
+                candidate_key = candidate.normalized_value or candidate.value
+                rows.append(candidate.to_metadata(source_image=source_image, selected=bool(selected_key and candidate_key == selected_key)))
+        return rows
+
+    @staticmethod
+    def _apply_barcode_scan(
+        record: ProductRecord,
+        barcode_candidate: BarcodeScanCandidate | str | None,
+        *,
+        candidates_by_image: Sequence[tuple[str | None, Sequence[BarcodeScanCandidate]]] | None = None,
+        selected_source_image: str | None = None,
+    ) -> None:
+        if not barcode_candidate:
+            if candidates_by_image:
+                record.metadata["barcode_candidates"] = ExtractionPipeline._barcode_candidate_metadata(candidates_by_image, None)
             return
+
+        if isinstance(barcode_candidate, BarcodeScanCandidate):
+            selected_candidate = barcode_candidate
+            barcode_value = selected_candidate.normalized_value or selected_candidate.value
+        else:
+            selected_candidate = BarcodeScanCandidate.from_value(barcode_candidate)
+            barcode_value = barcode_candidate
 
         scanner_validation = validate_barcode(barcode_value)
         model_value = record.barcode.value
         model_validation = validate_barcode(model_value)
+
+        if candidates_by_image is not None:
+            record.metadata["barcode_candidates"] = ExtractionPipeline._barcode_candidate_metadata(candidates_by_image, selected_candidate)
+            record.metadata["selected_barcode_candidate"] = selected_candidate.to_metadata(
+                source_image=selected_source_image,
+                selected=True,
+            )
 
         if model_value and model_validation.value != scanner_validation.value:
             record.metadata["barcode_conflict"] = {
@@ -59,6 +104,7 @@ class ExtractionPipeline:
                 "model_valid": model_validation.is_valid,
                 "scanner": scanner_validation.value,
                 "scanner_valid": scanner_validation.is_valid,
+                "scanner_source_image": selected_source_image,
             }
 
         should_use_scanner = scanner_validation.is_valid or not model_validation.is_valid
@@ -108,13 +154,20 @@ class ExtractionPipeline:
         image_hash = hash_image_bytes(image.image_bytes)
         preprocessed = preprocess(image.image_bytes)
 
-        vlm_record, barcode_value = await asyncio.gather(
+        vlm_record, barcode_candidates = await asyncio.gather(
             self.client.extract(preprocessed, filename=image.filename),
-            asyncio.to_thread(extract_barcode, preprocessed),
+            asyncio.to_thread(self._scan_barcode_candidates, preprocessed),
         )
+        barcode_candidate = choose_barcode_candidate(barcode_candidates)
+        barcode_value = barcode_candidate.normalized_value if barcode_candidate and barcode_candidate.normalized_value else None
 
         normalize_record(vlm_record)
-        self._apply_barcode_scan(vlm_record, barcode_value)
+        self._apply_barcode_scan(
+            vlm_record,
+            barcode_candidate,
+            candidates_by_image=[(image.filename, barcode_candidates)],
+            selected_source_image=image.filename if barcode_candidate else None,
+        )
         normalize_record(vlm_record)
         return self._record_to_evidence(vlm_record, image.filename, image_hash, barcode_value)
 
@@ -186,15 +239,21 @@ class ExtractionPipeline:
     async def process_image(self, image_bytes: bytes, filename: str | None = None) -> ProductRecord:
         preprocessed = preprocess(image_bytes)
 
-        vlm_record, barcode_value = await asyncio.gather(
+        vlm_record, barcode_candidates = await asyncio.gather(
             self.client.extract(preprocessed, filename=filename),
-            asyncio.to_thread(extract_barcode, preprocessed),
+            asyncio.to_thread(self._scan_barcode_candidates, preprocessed),
         )
+        barcode_candidate = choose_barcode_candidate(barcode_candidates)
 
         if not vlm_record.id:
             vlm_record.id = uuid.uuid4().hex
 
-        self._apply_barcode_scan(vlm_record, barcode_value)
+        self._apply_barcode_scan(
+            vlm_record,
+            barcode_candidate,
+            candidates_by_image=[(filename, barcode_candidates)],
+            selected_source_image=filename if barcode_candidate else None,
+        )
 
         normalize_record(vlm_record)
         return vlm_record
@@ -202,9 +261,9 @@ class ExtractionPipeline:
     async def process_group(self, group: ImageGroup) -> ProductRecord:
         preprocessed = [(image.filename, preprocess(image.image_bytes)) for image in group.images]
 
-        vlm_result, barcode_values = await asyncio.gather(
+        vlm_result, barcode_scan_results = await asyncio.gather(
             self.client.extract_group(preprocessed, group_id=group.group_id),
-            asyncio.gather(*(asyncio.to_thread(extract_barcode, image_bytes) for _, image_bytes in preprocessed)),
+            asyncio.gather(*(asyncio.to_thread(self._scan_barcode_candidates, image_bytes) for _, image_bytes in preprocessed)),
             return_exceptions=True,
         )
 
@@ -221,14 +280,31 @@ class ExtractionPipeline:
         vlm_record.metadata.setdefault("group_id", group.group_id)
         vlm_record.metadata.setdefault("image_count", len(group.images))
 
-        if isinstance(barcode_values, Exception):
-            vlm_record.metadata["barcode_error"] = str(barcode_values)
-            barcode_candidates: Sequence[str | None] = []
+        if isinstance(barcode_scan_results, Exception):
+            vlm_record.metadata["barcode_error"] = str(barcode_scan_results)
+            candidates_by_image: Sequence[tuple[str | None, Sequence[BarcodeScanCandidate]]] = []
         else:
-            barcode_candidates = barcode_values
+            candidates_by_image = [(filename, candidates) for (filename, _), candidates in zip(preprocessed, barcode_scan_results)]
 
-        barcode_value = next((value for value in barcode_candidates if value), None)
-        self._apply_barcode_scan(vlm_record, barcode_value)
+        flattened_candidates = [candidate for _, candidates in candidates_by_image for candidate in candidates]
+        barcode_candidate = choose_barcode_candidate(flattened_candidates)
+        selected_source_image = None
+        if barcode_candidate is not None:
+            selected_key = barcode_candidate.normalized_value or barcode_candidate.value
+            selected_source_image = next(
+                (
+                    source_image
+                    for source_image, candidates in candidates_by_image
+                    if any((candidate.normalized_value or candidate.value) == selected_key for candidate in candidates)
+                ),
+                None,
+            )
+        self._apply_barcode_scan(
+            vlm_record,
+            barcode_candidate,
+            candidates_by_image=candidates_by_image,
+            selected_source_image=selected_source_image,
+        )
 
         normalize_record(vlm_record)
         return vlm_record

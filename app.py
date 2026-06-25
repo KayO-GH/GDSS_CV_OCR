@@ -372,6 +372,18 @@ def render_field_editor(record: ProductRecord, attr: str, threshold: float) -> N
         else:
             st.caption(message)
 
+        if attr == "barcode":
+            candidates = record.metadata.get("barcode_candidates") or []
+            if candidates:
+                st.markdown("Barcode candidates")
+                frame = pd.DataFrame(candidates)
+                visible_columns = [
+                    column
+                    for column in ["value", "type", "is_valid", "reason", "source_image", "quality", "selected"]
+                    if column in frame.columns
+                ]
+                st.dataframe(frame[visible_columns], width="stretch", hide_index=True)
+
 
 def render_record_workspace(record: ProductRecord, threshold: float) -> None:
     st.markdown(f"#### {format_record_name(record)}")
@@ -408,6 +420,8 @@ def validation_rows(records: list[ProductRecord]) -> list[dict]:
                 "Pack count": pack.pack_count or "",
                 "Promotion": record.promotion.value or pack.promotion or "",
                 "Add-ons": record.addons.value or pack.addons or "",
+                "Barcode candidates": len(record.metadata.get("barcode_candidates") or []),
+                "Selected barcode image": (record.metadata.get("selected_barcode_candidate") or {}).get("source_image", ""),
                 "Required": f"{sum(1 for attr in REQUIRED_ATTRIBUTES if getattr(record, attr).value)}/{len(REQUIRED_ATTRIBUTES)}",
                 "Conflict": "Yes" if record.metadata.get("barcode_conflict") else "No",
             }

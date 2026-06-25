@@ -836,7 +836,7 @@ def render_model_cost_summary(records: list[ProductRecord]) -> None:
     cost_cols[0].metric("Model requests", summary["request_count"])
     cost_cols[1].metric("Images analyzed", summary["image_count"])
     cost_cols[2].metric("Tokens", summary["total_tokens"])
-    cost_cols[3].metric("Cost", format_cost_usd(summary["total_cost_usd"]) if summary["known_cost_count"] else "Pricing unavailable")
+    cost_cols[3].metric("Cost", format_cost_usd(summary["total_cost_usd"]) if summary["known_cost_count"] else "n/a")
 
     models = ", ".join(summary["models"]) or "Unknown model"
     if summary["cost_available"]:

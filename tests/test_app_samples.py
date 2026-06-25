@@ -369,7 +369,7 @@ def test_render_model_cost_summary_shows_usage_and_unknown_pricing(monkeypatch):
     assert "##### Model usage and cost" in markdowns
     assert "Model requests" in labels
     assert "Tokens" in labels
-    assert "Pricing unavailable" in values
+    assert "n/a" in values
     assert any("Pricing unavailable for this model." in caption for caption in captions)
 
 

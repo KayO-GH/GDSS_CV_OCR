@@ -330,6 +330,23 @@ def identify_product_groups(
 
     st.session_state.uploaded_image_payloads = payloads
     status = st.status("Identifying product groups", expanded=True)
+    if len(payloads) == 1:
+        clusters = [
+            ProductImageCluster(
+                group_id="review-001",
+                images=[payloads[0]],
+                evidence=[],
+                confidence=0.5,
+                reason="single uploaded image; no grouping needed",
+                needs_review=True,
+            )
+        ]
+        st.session_state.inferred_image_clusters = clusters
+        create_batch_run(payloads, clusters)
+        status.write("Single image queued for review")
+        status.update(label="Single image queued for review", state="complete")
+        return clusters, errors
+
     if consider_filename_prefixes:
         clusters = prefix_group_clusters(payloads)
         if clusters:

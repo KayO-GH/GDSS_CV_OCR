@@ -173,6 +173,49 @@ def test_hf_router_response_parses_chat_completion_message():
     assert record.filename == "auto-001"
 
 
+def test_hf_router_response_rejects_trailing_json_content():
+    client = HuggingFaceRouterVLMClient(
+        api_key="test",
+        api_url="https://router.huggingface.co/v1/chat/completions",
+        model="zai-org/GLM-4.6V-Flash",
+    )
+    payload = {name: {"value": None, "confidence": 0.0, "source": "test", "notes": None} for name in IMDB_ATTRIBUTES}
+    response = {
+        "id": "hf-id",
+        "choices": [{"message": {"content": f"{json.dumps(payload)}\nextra"}}],
+    }
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"Provider returned invalid JSON for huggingface/zai-org/GLM-4\.6V-Flash: "
+            r"trailing or malformed content at line 2, column 1\. "
+            r"Try retrying or switching to a stricter JSON-schema-capable model\."
+        ),
+    ) as exc_info:
+        client._parse_response(response, filename="auto-001", filenames=["a.jpg"])
+
+    assert "extra" not in str(exc_info.value)
+
+
+def test_cohere_response_rejects_trailing_json_content():
+    client = CohereVLMClient(api_key="test", api_url="https://api.cohere.com/v2/chat")
+    payload = {name: {"value": None, "confidence": 0.0, "source": "test", "notes": None} for name in IMDB_ATTRIBUTES}
+    response = {"id": "cohere-id", "message": {"content": [{"type": "text", "text": f"{json.dumps(payload)}\nextra"}]}}
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"Provider returned invalid JSON for cohere/command-a-vision-07-2025: "
+            r"trailing or malformed content at line 2, column 1\. "
+            r"Try retrying or switching to a stricter JSON-schema-capable model\."
+        ),
+    ) as exc_info:
+        client._parse_response(response, filename="S1", filenames=["S1_1.jpg"])
+
+    assert "extra" not in str(exc_info.value)
+
+
 @pytest.mark.asyncio
 async def test_hf_router_client_raises_clear_error_when_api_key_missing():
     client = HuggingFaceRouterVLMClient(

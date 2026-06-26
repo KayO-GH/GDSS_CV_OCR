@@ -156,6 +156,17 @@ def attributes_from_payload(payload: dict[str, Any]) -> dict[str, Attribute]:
     return {name: Attribute(**normalize_attribute_payload(normalized_payload.get(name))) for name in IMDB_ATTRIBUTES}
 
 
+def _load_provider_json(text: str, *, provider: str, model: str) -> dict[str, Any]:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Provider returned invalid JSON for {provider}/{model}: "
+            f"trailing or malformed content at line {exc.lineno}, column {exc.colno}. "
+            "Try retrying or switching to a stricter JSON-schema-capable model."
+        ) from exc
+
+
 def compact_error_detail(detail: str) -> str:
     collapsed = re.sub(r"<[^>]+>", " ", detail)
     collapsed = re.sub(r"\s+", " ", collapsed).strip()
@@ -329,7 +340,7 @@ class OpenAIVLMClient(BaseVLMClient):
         raw_output = response.get("output") or response.get("content")
 
         if isinstance(raw_output, str):
-            payload = json.loads(raw_output)
+            payload = _load_provider_json(raw_output, provider=self.provider, model=self.model)
         elif isinstance(raw_output, list):
             for block in reversed(raw_output):
                 if isinstance(block, dict):
@@ -339,12 +350,12 @@ class OpenAIVLMClient(BaseVLMClient):
                             if isinstance(item, dict) and item.get("type") in {"output_text", "text"}:
                                 text = item.get("text")
                                 if isinstance(text, str):
-                                    payload = json.loads(text)
+                                    payload = _load_provider_json(text, provider=self.provider, model=self.model)
                                     break
                         if payload:
                             break
                     elif isinstance(content, str):
-                        payload = json.loads(content)
+                        payload = _load_provider_json(content, provider=self.provider, model=self.model)
                         break
 
         return ProductRecord(id=record_id, filename=filename, filenames=filenames or [], **attributes_from_payload(payload or {}))
@@ -396,12 +407,12 @@ class CohereVLMClient(BaseVLMClient):
         if isinstance(content, list):
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
-                    payload = json.loads(item["text"])
+                    payload = _load_provider_json(item["text"], provider=self.provider, model=self.model)
                     break
         elif isinstance(content, str):
-            payload = json.loads(content)
+            payload = _load_provider_json(content, provider=self.provider, model=self.model)
         elif isinstance(response.get("text"), str):
-            payload = json.loads(response["text"])
+            payload = _load_provider_json(response["text"], provider=self.provider, model=self.model)
 
         return ProductRecord(id=record_id, filename=filename, filenames=filenames or [], **attributes_from_payload(payload or {}))
 
@@ -460,12 +471,12 @@ class HuggingFaceRouterVLMClient(BaseVLMClient):
                     continue
                 content = message.get("content")
                 if isinstance(content, str):
-                    payload = json.loads(content)
+                    payload = _load_provider_json(content, provider=self.provider, model=self.model)
                     break
                 if isinstance(content, list):
                     for item in content:
                         if isinstance(item, dict) and item.get("type") in {"output_text", "text"} and isinstance(item.get("text"), str):
-                            payload = json.loads(item["text"])
+                            payload = _load_provider_json(item["text"], provider=self.provider, model=self.model)
                             break
                     if payload:
                         break

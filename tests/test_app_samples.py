@@ -477,22 +477,26 @@ def test_identify_product_groups_ignores_prefixes_when_toggle_disabled(monkeypat
     monkeypatch.setattr(app.st, "status", status_factory)
     monkeypatch.setattr(app, "prefix_group_clusters", lambda payloads: (_ for _ in ()).throw(AssertionError("should not be called")))
 
-    payload = ImagePayload(filename="S227094844_568727215.jpg", image_bytes=b"1")
-    evidence = [ImageEvidence(payload_id=payload.payload_id, filename=payload.filename, image_hash="h1", brand="SIYA")]
+    first = ImagePayload(filename="S227094844_568727215.jpg", image_bytes=b"1")
+    second = ImagePayload(filename="S227094844_568727216.jpg", image_bytes=b"2")
+    evidence = [
+        ImageEvidence(payload_id=first.payload_id, filename=first.filename, image_hash="h1", brand="SIYA"),
+        ImageEvidence(payload_id=second.payload_id, filename=second.filename, image_hash="h2", brand="SIYA"),
+    ]
     pipeline = _GroupingPipelineStub(evidence)
     expected = [
         ProductImageCluster(
             group_id="auto-001",
-            images=[payload],
+            images=[first, second],
             evidence=evidence,
-            confidence=0.5,
+            confidence=0.9,
             reason="test",
-            needs_review=True,
+            needs_review=False,
         )
     ]
     monkeypatch.setattr(app, "infer_product_groups", lambda payloads, evidence_by_payload_id: expected)
 
-    clusters, errors = app.identify_product_groups([payload], pipeline, consider_filename_prefixes=False)
+    clusters, errors = app.identify_product_groups([first, second], pipeline, consider_filename_prefixes=False)
 
     assert errors == []
     assert pipeline.called is True
@@ -532,27 +536,37 @@ def test_identify_product_groups_falls_back_to_evidence_when_prefixes_are_not_us
 
 
 def test_identify_product_groups_single_image_still_returns_candidate_group(monkeypatch):
+    _clear_batch_state()
     payload = ImagePayload(filename="single.jpg", image_bytes=b"1")
-    evidence = [ImageEvidence(payload_id=payload.payload_id, filename=payload.filename, image_hash="h1", brand="ONE")]
-    pipeline = _GroupingPipelineStub(evidence)
-    expected = [
-        ProductImageCluster(
-            group_id="review-001",
-            images=[payload],
-            evidence=evidence,
-            confidence=0.5,
-            reason="insufficient matching evidence; kept separate",
-            needs_review=True,
-        )
-    ]
-    monkeypatch.setattr(app.st, "status", _DummyStatusFactory())
-    monkeypatch.setattr(app, "infer_product_groups", lambda payloads, evidence_by_payload_id: expected)
+    pipeline = _GroupingPipelineStub([])
+    status_factory = _DummyStatusFactory()
+    monkeypatch.setattr(app.st, "status", status_factory)
 
     clusters, errors = app.identify_product_groups([payload], pipeline, consider_filename_prefixes=True)
 
     assert errors == []
-    assert pipeline.called is True
-    assert clusters == expected
+    assert pipeline.called is False
+    assert len(clusters) == 1
+    assert clusters[0] == ProductImageCluster(
+        group_id="review-001",
+        images=[payload],
+        evidence=[],
+        confidence=0.5,
+        reason="single uploaded image; no grouping needed",
+        needs_review=True,
+    )
+    assert app.st.session_state.uploaded_image_payloads == [payload]
+    assert app.st.session_state.inferred_image_clusters == clusters
+    assert app.current_batch_id() == "batch-001"
+    assert len(app.batch_history()) == 1
+    batch = app.batch_history()[0]
+    assert batch.uploaded_filenames == ["single.jpg"]
+    assert batch.image_count == 1
+    assert batch.inferred_groups == ["review-001"]
+    assert batch.status == "identified"
+    assert status_factory.instances[0].updated is True
+    assert status_factory.instances[0].label == "Single image queued for review"
+    assert status_factory.instances[0].state == "complete"
 
 
 def test_next_manual_group_id_skips_existing_ids():
